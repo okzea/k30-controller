@@ -15,8 +15,8 @@ For a diagram of where each key sits, open [`docs/key-map.html`](docs/key-map.ht
 | **K3** | `Esc` |
 | **K4** | Clear the focused field (`Ctrl+A`, `Backspace`) |
 | **K5** | New session (`Ctrl+N`) |
-| **K6** | Open Claude's model menu |
-| **K7** | Open Claude's effort panel |
+| **K6** | Mark the session as read/unread (`Ctrl+Alt+U`) |
+| **K7** | Archive the session (`Ctrl+Alt+A`) |
 | **K8** | Fast mode (`Ctrl+Alt+F`) |
 | **K9 / K10** | Previous / next session or tab (`Ctrl+Shift+Tab` / `Ctrl+Tab`) |
 | **K11** | `Enter` · hold: `Ctrl+Enter` |
