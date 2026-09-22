@@ -59,15 +59,22 @@ class Config {
     public List<DialMode> DialModes = new List<DialMode>();
     public int LongPressMs = 450, DoublePressMs = 300;
     public string DigiDrawPath = @"%APPDATA%\TuringTablet\TuringTablet.exe";
-    public int WakeKickSeconds = 15;
+    public int WakeKickSeconds = 0;
+    public int RollerIdleMs = 350;
+    public List<string> WakeCommands = new List<string> { "CD C0", "CD D3", "CD CC", "CD C0", "CD B5", "CD B4", "CD D3", "CD BD" };
+    public bool HidWake = true;
+    public int WakeRepeat = 1;
 
     public const string Default = @"{
   ""_help_address"": ""'auto' connects to the first paired Bluetooth device named 'Turing KDial…'. Or give its address, e.g. 'AA:BB:CC:DD:EE:FF'."",
   ""address"": ""auto"",
 
-  ""_help_wakeKick"": ""After power-up or sleep the K30 is back on its built-in keys until DigiDraw sends it a start command. On every (re)connect K30 Controller runs DigiDraw for wakeKickSeconds, then closes it. Set wakeKickSeconds to 0 to turn this off."",
+  ""_help_wake"": ""After power-up or sleep the K30 is back on its built-in keys. On every (re)connect K30 Controller switches it to controller mode: it writes 00 00 to HID feature report 5 of the K30's multi-axis collection (hidWake) and sends DigiDraw's status queries to FFE2 (wakeCommands), wakeRepeat times. Fallback: wakeKickSeconds > 0 runs DigiDraw (digidrawPath) that long instead."",
+  ""hidWake"": true,
+  ""wakeCommands"": [""CD C0"", ""CD D3"", ""CD CC"", ""CD C0"", ""CD B5"", ""CD B4"", ""CD D3"", ""CD BD""],
+  ""wakeRepeat"": 1,
+  ""wakeKickSeconds"": 0,
   ""digidrawPath"": ""%APPDATA%\\TuringTablet\\TuringTablet.exe"",
-  ""wakeKickSeconds"": 15,
 
   ""_help_keys"": ""Shortcut syntax: ctrl+shift+i, alt+tab, win+tab, esc, enter, up, down, f13... Separate several with commas to send them in order (ctrl+a, backspace). Prefix with 'hold ' to keep the keys down while the button is held (push-to-talk). 'nextMode' / 'prevMode' cycle the dial mode. 'claude:model' / 'claude:effort' open Claude's model menu / effort panel. Add 'K2:long' or 'K2:double' for a second action on a long or double press (the plain action then fires on release)."",
   ""longPressMs"": 450,
@@ -89,7 +96,8 @@ class Config {
     ""Dial"": ""nextMode""
   },
 
-  ""_help_roller"": ""Any shortcut, wheel+1 / wheel-1 to scroll, or alttab:next / alttab:prev to switch windows (Alt stays held while rolling)."",
+  ""_help_roller"": ""Any shortcut, wheel+1 / wheel-1 to scroll, or alttab:next / alttab:prev to switch windows (Alt stays held while rolling and is released rollerIdleMs after the last click)."",
+  ""rollerIdleMs"": 350,
   ""roller"": { ""up"": ""alttab:next"", ""down"": ""alttab:prev"" },
 
   ""_help_dialModes"": ""type 'keys': cw/ccw sent per click. type 'alttab': holds Alt while turning. type 'claude-model': turn to pick a model, it is selected when the dial rests for idleMs (press the dial to confirm Claude's 'Switch model?' prompt). type 'claude-effort': moves Claude's effort slider; 'max' is the highest step reachable (0 Low, 1 Medium, 2 High, 3 Extra, 4 Max, 5 Ultracode). type 'menu': first click sends 'open', next clicks send cw/ccw, 'confirm' is sent when the dial rests."",
@@ -113,6 +121,13 @@ class Config {
             if (root.TryGetProperty("doublePressMs", out a) && a.ValueKind == JsonValueKind.Number) c.DoublePressMs = a.GetInt32();
             if (root.TryGetProperty("digidrawPath", out a) && a.ValueKind == JsonValueKind.String) c.DigiDrawPath = a.GetString();
             if (root.TryGetProperty("wakeKickSeconds", out a) && a.ValueKind == JsonValueKind.Number) c.WakeKickSeconds = a.GetInt32();
+            if (root.TryGetProperty("rollerIdleMs", out a) && a.ValueKind == JsonValueKind.Number) c.RollerIdleMs = a.GetInt32();
+            if (root.TryGetProperty("wakeRepeat", out a) && a.ValueKind == JsonValueKind.Number) c.WakeRepeat = Math.Max(1, a.GetInt32());
+            if (root.TryGetProperty("hidWake", out a) && (a.ValueKind == JsonValueKind.True || a.ValueKind == JsonValueKind.False)) c.HidWake = a.GetBoolean();
+            if (root.TryGetProperty("wakeCommands", out a) && a.ValueKind == JsonValueKind.Array) {
+                c.WakeCommands.Clear();
+                foreach (var w in a.EnumerateArray()) if (w.ValueKind == JsonValueKind.String) c.WakeCommands.Add(w.GetString());
+            }
             foreach (var kv in root.GetProperty("keys").EnumerateObject()) c.Keys[kv.Name.ToUpperInvariant()] = kv.Value.GetString();
             JsonElement roller;
             if (root.TryGetProperty("roller", out roller)) { c.RollerUp = Str(roller, "up"); c.RollerDown = Str(roller, "down"); }
@@ -214,6 +229,119 @@ static class Output {
             if (s.StartsWith("wheel", StringComparison.OrdinalIgnoreCase)) Wheel(int.Parse(s.Substring(5)));
             else Tap(Parse(s));
         }
+    }
+}
+
+// ---------------------------------------------------------------- K30 HID wake (vendor-mode switch)
+
+/// DigiDraw switches the K30 out of its built-in-keys mode by writing a 2-byte report of zeros to the K30's
+/// "system multi-axis controller" HID collection (seen as ATT writes of 00 00 to handle 0x0040 in a
+/// Bluetooth trace). This sends the same report: a feature report if the collection has one, else an output report.
+static class K30Hid {
+    [DllImport("hid.dll")] static extern void HidD_GetHidGuid(out Guid g);
+    [DllImport("hid.dll")] static extern bool HidD_GetPreparsedData(Microsoft.Win32.SafeHandles.SafeFileHandle h, out IntPtr pp);
+    [DllImport("hid.dll")] static extern bool HidD_FreePreparsedData(IntPtr pp);
+    [DllImport("hid.dll")] static extern int HidP_GetCaps(IntPtr pp, byte[] caps);
+    [DllImport("hid.dll")] static extern int HidP_GetValueCaps(int type, byte[] caps, ref ushort len, IntPtr pp);
+    [DllImport("hid.dll")] static extern int HidP_GetButtonCaps(int type, byte[] caps, ref ushort len, IntPtr pp);
+    [DllImport("hid.dll")] static extern bool HidD_GetFeature(Microsoft.Win32.SafeHandles.SafeFileHandle h, byte[] buf, int len);
+    [DllImport("hid.dll")] static extern bool HidD_SetFeature(Microsoft.Win32.SafeHandles.SafeFileHandle h, byte[] buf, int len);
+    [DllImport("hid.dll")] static extern bool HidD_SetOutputReport(Microsoft.Win32.SafeHandles.SafeFileHandle h, byte[] buf, int len);
+    [DllImport("setupapi.dll", CharSet = CharSet.Unicode)] static extern IntPtr SetupDiGetClassDevs(ref Guid g, string e, IntPtr p, int f);
+    [DllImport("setupapi.dll")] static extern bool SetupDiDestroyDeviceInfoList(IntPtr s);
+    [DllImport("setupapi.dll", CharSet = CharSet.Unicode)] static extern bool SetupDiEnumDeviceInterfaces(IntPtr s, IntPtr d, ref Guid g, int i, ref SP_DEVICE_INTERFACE_DATA data);
+    [DllImport("setupapi.dll", CharSet = CharSet.Unicode)] static extern bool SetupDiGetDeviceInterfaceDetail(IntPtr s, ref SP_DEVICE_INTERFACE_DATA data, IntPtr detail, int size, out int req, IntPtr info);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern Microsoft.Win32.SafeHandles.SafeFileHandle CreateFile(string n, uint access, uint share, IntPtr sa, uint disp, uint flags, IntPtr t);
+
+    [StructLayout(LayoutKind.Sequential)] struct SP_DEVICE_INTERFACE_DATA { public int cbSize; public Guid g; public int flags; public IntPtr r; }
+
+    const int HidpOutput = 1, HidpFeature = 2, HidpStatusSuccess = 0x110000, CapsStructSize = 72;
+
+    static System.Collections.Generic.IEnumerable<string> K30Paths() {
+        Guid hid; HidD_GetHidGuid(out hid);
+        IntPtr set = SetupDiGetClassDevs(ref hid, null, IntPtr.Zero, 0x12); // PRESENT | DEVICEINTERFACE
+        try {
+            for (int i = 0; ; i++) {
+                var d = new SP_DEVICE_INTERFACE_DATA { cbSize = Marshal.SizeOf(typeof(SP_DEVICE_INTERFACE_DATA)) };
+                if (!SetupDiEnumDeviceInterfaces(set, IntPtr.Zero, ref hid, i, ref d)) yield break;
+                int req; SetupDiGetDeviceInterfaceDetail(set, ref d, IntPtr.Zero, 0, out req, IntPtr.Zero);
+                IntPtr buf = Marshal.AllocHGlobal(req);
+                string path;
+                try {
+                    Marshal.WriteInt32(buf, IntPtr.Size == 8 ? 8 : 6);
+                    SetupDiGetDeviceInterfaceDetail(set, ref d, buf, req, out req, IntPtr.Zero);
+                    path = Marshal.PtrToStringUni(buf + 4);
+                } finally { Marshal.FreeHGlobal(buf); }
+                if (path.IndexOf("023866", StringComparison.OrdinalIgnoreCase) >= 0) yield return path;
+            }
+        } finally { SetupDiDestroyDeviceInfoList(set); }
+    }
+
+    static System.Collections.Generic.List<byte> ReportIds(IntPtr pp, int type, ushort valueCount, ushort buttonCount) {
+        var ids = new System.Collections.Generic.List<byte>();
+        if (valueCount > 0) {
+            var raw = new byte[valueCount * CapsStructSize]; ushort n = valueCount;
+            if (HidP_GetValueCaps(type, raw, ref n, pp) == HidpStatusSuccess)
+                for (int i = 0; i < n; i++) if (!ids.Contains(raw[i * CapsStructSize + 2])) ids.Add(raw[i * CapsStructSize + 2]);
+        }
+        if (buttonCount > 0) {
+            var raw = new byte[buttonCount * CapsStructSize]; ushort n = buttonCount;
+            if (HidP_GetButtonCaps(type, raw, ref n, pp) == HidpStatusSuccess)
+                for (int i = 0; i < n; i++) if (!ids.Contains(raw[i * CapsStructSize + 2])) ids.Add(raw[i * CapsStructSize + 2]);
+        }
+        if (ids.Count == 0) ids.Add(0);
+        return ids;
+    }
+
+    static string GetFeature(Microsoft.Win32.SafeHandles.SafeFileHandle h, byte id, int len) {
+        var buf = new byte[len]; buf[0] = id;
+        return HidD_GetFeature(h, buf, len) ? BitConverter.ToString(buf).Replace("-", " ") : "read failed " + Marshal.GetLastWin32Error();
+    }
+
+    /// Returns true if a report was written to the multi-axis collection.
+    public static bool Wake(Action<string> log) {
+        bool sent = false;
+        foreach (var path in K30Paths()) {
+            using (var q = CreateFile(path, 0, 3, IntPtr.Zero, 3, 0, IntPtr.Zero)) {
+                if (q.IsInvalid) continue;
+                IntPtr pp;
+                if (!HidD_GetPreparsedData(q, out pp)) continue;
+                try {
+                    var caps = new byte[64];
+                    HidP_GetCaps(pp, caps);
+                    ushort usage = BitConverter.ToUInt16(caps, 0), page = BitConverter.ToUInt16(caps, 2);
+                    ushort inLen = BitConverter.ToUInt16(caps, 4), outLen = BitConverter.ToUInt16(caps, 6), featLen = BitConverter.ToUInt16(caps, 8);
+                    // after Usage, UsagePage, 3 lengths (10 bytes) and Reserved[17] (34 bytes): 10 counts
+                    ushort outBtn = BitConverter.ToUInt16(caps, 52), outVal = BitConverter.ToUInt16(caps, 54);
+                    ushort featBtn = BitConverter.ToUInt16(caps, 58), featVal = BitConverter.ToUInt16(caps, 60);
+                    log(string.Format("hid 0x{0:X2}/0x{1:X2} in={2} out={3} feature={4}", page, usage, inLen, outLen, featLen));
+                    if (page != 0x01 || (usage != 0x0E && usage != 0x08)) continue; // only the (system) multi-axis controller collection
+
+                    using (var h = CreateFile(path, 0xC0000000, 3, IntPtr.Zero, 3, 0, IntPtr.Zero)) {
+                        if (h.IsInvalid) { log("hid wake: cannot open multi-axis collection (" + Marshal.GetLastWin32Error() + ")"); continue; }
+                        if (featLen > 0) {
+                            foreach (var id in ReportIds(pp, HidpFeature, featVal, featBtn)) {
+                                log("hid wake: feature id=" + id + " before = " + GetFeature(h, id, featLen));
+                                var buf = new byte[featLen]; buf[0] = id;
+                                bool ok = HidD_SetFeature(h, buf, buf.Length);
+                                log("hid wake: feature id=" + id + " set 00.. -> " + (ok ? "ok" : "failed " + Marshal.GetLastWin32Error()));
+                                string after = GetFeature(h, id, featLen);
+                                log("hid wake: feature id=" + id + " after  = " + after + (after.StartsWith(id.ToString("X2") + " 00 00") ? "" : "  (WARNING: not 00 00, the K30 may stay on its built-in keys)"));
+                                sent |= ok;
+                            }
+                        } else if (outLen > 0) {
+                            foreach (var id in ReportIds(pp, HidpOutput, outVal, outBtn)) {
+                                var buf = new byte[outLen]; buf[0] = id;
+                                bool ok = HidD_SetOutputReport(h, buf, buf.Length);
+                                log("hid wake: output id=" + id + " len=" + outLen + " -> " + (ok ? "ok" : "failed " + Marshal.GetLastWin32Error()));
+                                sent |= ok;
+                            }
+                        } else log("hid wake: multi-axis collection has no feature/output report");
+                    }
+                } finally { HidD_FreePreparsedData(pp); }
+            }
+        }
+        return sent;
     }
 }
 
@@ -655,7 +783,7 @@ class K30App : ApplicationContext {
     bool menuOpen, altHeld;
     readonly Dictionary<int, ushort[]> held = new Dictionary<int, ushort[]>();
     BluetoothLEDevice dev;
-    GattCharacteristic ffe1;
+    GattCharacteristic ffe1, ffe2;
     bool connected;
 
     readonly ClaudeUi claude = new ClaudeUi();
@@ -764,6 +892,11 @@ class K30App : ApplicationContext {
 
         // After power-up or sleep the K30 is back on its built-in HID keys; only DigiDraw knows the command
         // that switches it to vendor mode. Let DigiDraw send it, then take over.
+        for (int round = 0; round < cfg.WakeRepeat; round++) {
+            if (round > 0) Thread.Sleep(700);
+            if (cfg.HidWake) { try { K30Hid.Wake(Log); } catch (Exception e) { Log("hid wake: " + e.Message); } }
+            if (cfg.WakeCommands.Count > 0) SendWakeCommands(sr.Services[0]);
+        }
         if (WakeKick(sr.Services[0])) sr = OpenVendorService();
 
         var cr = W(sr.Services[0].GetCharacteristicsForUuidAsync(new Guid("0000ffe1-0000-1000-8000-00805f9b34fb"), BluetoothCacheMode.Uncached));
@@ -782,6 +915,36 @@ class K30App : ApplicationContext {
         var sr = W(dev.GetGattServicesForUuidAsync(new Guid("0000ffe0-0000-1000-8000-00805f9b34fb"), BluetoothCacheMode.Uncached));
         if (sr.Status != GattCommunicationStatus.Success || sr.Services.Count == 0) throw new Exception("FFE0 service unavailable (" + sr.Status + ") — device asleep?");
         return sr;
+    }
+
+    /// Writes the configured commands to FFE2 (the K30's command characteristic), the way DigiDraw does:
+    /// 8-byte packets "CD xx 00 00 00 00 00 00". The K30 answers some of them with indications on FFE2,
+    /// which are logged ("ffe2 <-").
+    void SendWakeCommands(GattDeviceService svc) {
+        var cr = W(svc.GetCharacteristicsForUuidAsync(new Guid("0000ffe2-0000-1000-8000-00805f9b34fb"), BluetoothCacheMode.Uncached));
+        if (cr.Status != GattCommunicationStatus.Success || cr.Characteristics.Count == 0) { Log("ffe2 unavailable (" + cr.Status + ")"); return; }
+        var c = cr.Characteristics[0];
+        if (ffe2 != null) ffe2.ValueChanged -= OnFfe2;
+        c.ValueChanged += OnFfe2;
+        try { W(c.WriteClientCharacteristicConfigurationDescriptorAsync(GattClientCharacteristicConfigurationDescriptorValue.Indicate)); } catch (Exception e) { Log("ffe2 indicate: " + e.Message); }
+        ffe2 = c;
+        foreach (var cmd in cfg.WakeCommands) {
+            var bytes = new byte[8];
+            var parts = cmd.Split(new[] { ' ', ',' }, StringSplitOptions.RemoveEmptyEntries);
+            for (int i = 0; i < parts.Length && i < 8; i++) bytes[i] = Convert.ToByte(parts[i], 16);
+            var w = new DataWriter();
+            w.WriteBytes(bytes);
+            var st = W(c.WriteValueAsync(w.DetachBuffer(), GattWriteOption.WriteWithoutResponse));
+            Log("ffe2 -> " + BitConverter.ToString(bytes).Replace("-", " ") + " (" + st + ")");
+            Thread.Sleep(250);
+        }
+    }
+
+    void OnFfe2(GattCharacteristic s, GattValueChangedEventArgs e) {
+        var r = DataReader.FromBuffer(e.CharacteristicValue);
+        var b = new byte[e.CharacteristicValue.Length];
+        r.ReadBytes(b);
+        Log("ffe2 <- " + BitConverter.ToString(b).Replace("-", " "));
     }
 
     DateTime lastKick = DateTime.MinValue;
@@ -1026,7 +1189,7 @@ class K30App : ApplicationContext {
     void Roller(string action) {
         if (action == null) return;
         string a = action.Trim().ToLowerInvariant();
-        if (a == "alttab:next" || a == "alttab:prev") AltTab(a == "alttab:next", 900);
+        if (a == "alttab:next" || a == "alttab:prev") AltTab(a == "alttab:next", cfg.RollerIdleMs);
         else Output.Run(action);
     }
 
