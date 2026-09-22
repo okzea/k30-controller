@@ -58,10 +58,16 @@ class Config {
     public string RollerUp, RollerDown;
     public List<DialMode> DialModes = new List<DialMode>();
     public int LongPressMs = 450, DoublePressMs = 300;
+    public string DigiDrawPath = @"%APPDATA%\TuringTablet\TuringTablet.exe";
+    public int WakeKickSeconds = 15;
 
     public const string Default = @"{
   ""_help_address"": ""'auto' connects to the first paired Bluetooth device named 'Turing KDial…'. Or give its address, e.g. 'AA:BB:CC:DD:EE:FF'."",
   ""address"": ""auto"",
+
+  ""_help_wakeKick"": ""After power-up or sleep the K30 is back on its built-in keys until DigiDraw sends it a start command. On every (re)connect K30 Controller runs DigiDraw for wakeKickSeconds, then closes it. Set wakeKickSeconds to 0 to turn this off."",
+  ""digidrawPath"": ""%APPDATA%\\TuringTablet\\TuringTablet.exe"",
+  ""wakeKickSeconds"": 15,
 
   ""_help_keys"": ""Shortcut syntax: ctrl+shift+i, alt+tab, win+tab, esc, enter, up, down, f13... Separate several with commas to send them in order (ctrl+a, backspace). Prefix with 'hold ' to keep the keys down while the button is held (push-to-talk). 'nextMode' / 'prevMode' cycle the dial mode. 'claude:model' / 'claude:effort' open Claude's model menu / effort panel. Add 'K2:long' or 'K2:double' for a second action on a long or double press (the plain action then fires on release)."",
   ""longPressMs"": 450,
@@ -84,7 +90,7 @@ class Config {
   },
 
   ""_help_roller"": ""Any shortcut, wheel+1 / wheel-1 to scroll, or alttab:next / alttab:prev to switch windows (Alt stays held while rolling)."",
-  ""roller"": { ""up"": ""alttab:prev"", ""down"": ""alttab:next"" },
+  ""roller"": { ""up"": ""alttab:next"", ""down"": ""alttab:prev"" },
 
   ""_help_dialModes"": ""type 'keys': cw/ccw sent per click. type 'alttab': holds Alt while turning. type 'claude-model': turn to pick a model, it is selected when the dial rests for idleMs (press the dial to confirm Claude's 'Switch model?' prompt). type 'claude-effort': moves Claude's effort slider; 'max' is the highest step reachable (0 Low, 1 Medium, 2 High, 3 Extra, 4 Max, 5 Ultracode). type 'menu': first click sends 'open', next clicks send cw/ccw, 'confirm' is sent when the dial rests."",
   ""dialModes"": [
@@ -105,6 +111,8 @@ class Config {
             c.Address = addr.Length == 0 || addr.Equals("auto", StringComparison.OrdinalIgnoreCase) ? 0 : Convert.ToUInt64(addr.Replace(":", ""), 16);
             if (root.TryGetProperty("longPressMs", out a) && a.ValueKind == JsonValueKind.Number) c.LongPressMs = a.GetInt32();
             if (root.TryGetProperty("doublePressMs", out a) && a.ValueKind == JsonValueKind.Number) c.DoublePressMs = a.GetInt32();
+            if (root.TryGetProperty("digidrawPath", out a) && a.ValueKind == JsonValueKind.String) c.DigiDrawPath = a.GetString();
+            if (root.TryGetProperty("wakeKickSeconds", out a) && a.ValueKind == JsonValueKind.Number) c.WakeKickSeconds = a.GetInt32();
             foreach (var kv in root.GetProperty("keys").EnumerateObject()) c.Keys[kv.Name.ToUpperInvariant()] = kv.Value.GetString();
             JsonElement roller;
             if (root.TryGetProperty("roller", out roller)) { c.RollerUp = Str(roller, "up"); c.RollerDown = Str(roller, "down"); }
@@ -752,8 +760,12 @@ class K30App : ApplicationContext {
                 if (d.ConnectionStatus != BluetoothConnectionStatus.Connected) SetConnected(false);
             };
         }
-        var sr = W(dev.GetGattServicesForUuidAsync(new Guid("0000ffe0-0000-1000-8000-00805f9b34fb"), BluetoothCacheMode.Uncached));
-        if (sr.Status != GattCommunicationStatus.Success || sr.Services.Count == 0) throw new Exception("FFE0 service unavailable (" + sr.Status + ") — device asleep?");
+        var sr = OpenVendorService();
+
+        // After power-up or sleep the K30 is back on its built-in HID keys; only DigiDraw knows the command
+        // that switches it to vendor mode. Let DigiDraw send it, then take over.
+        if (WakeKick(sr.Services[0])) sr = OpenVendorService();
+
         var cr = W(sr.Services[0].GetCharacteristicsForUuidAsync(new Guid("0000ffe1-0000-1000-8000-00805f9b34fb"), BluetoothCacheMode.Uncached));
         if (cr.Status != GattCommunicationStatus.Success || cr.Characteristics.Count == 0) throw new Exception("FFE1 unavailable (" + cr.Status + ")");
         var c = cr.Characteristics[0];
@@ -764,6 +776,43 @@ class K30App : ApplicationContext {
         ffe1 = c;
         Log("subscribed to FFE1");
         SetConnected(true);
+    }
+
+    GattDeviceServicesResult OpenVendorService() {
+        var sr = W(dev.GetGattServicesForUuidAsync(new Guid("0000ffe0-0000-1000-8000-00805f9b34fb"), BluetoothCacheMode.Uncached));
+        if (sr.Status != GattCommunicationStatus.Success || sr.Services.Count == 0) throw new Exception("FFE0 service unavailable (" + sr.Status + ") — device asleep?");
+        return sr;
+    }
+
+    DateTime lastKick = DateTime.MinValue;
+
+    /// Runs DigiDraw for a few seconds so it sends the K30 its vendor-mode command, then closes it.
+    /// Returns true when it ran (the caller then reopens the service it had to release).
+    bool WakeKick(GattDeviceService held) {
+        if (cfg.WakeKickSeconds <= 0 || string.IsNullOrWhiteSpace(cfg.DigiDrawPath)) return false;
+        string exe = Environment.ExpandEnvironmentVariables(cfg.DigiDrawPath);
+        if (!File.Exists(exe)) { Log("wake kick skipped: DigiDraw not found at " + exe); return false; }
+        if ((DateTime.UtcNow - lastKick).TotalSeconds < 60) return false; // never loop on a flaky link
+        lastKick = DateTime.UtcNow;
+
+        UI(() => osd.Flash("Waking K30…", "Switching it to controller mode (" + cfg.WakeKickSeconds + " s)", cfg.WakeKickSeconds * 1000 + 3000, Osd.Orange));
+        Log("wake kick: starting DigiDraw");
+        // Release our hold on the vendor service so DigiDraw can open it.
+        if (ffe1 != null) { ffe1.ValueChanged -= OnNotify; ffe1 = null; }
+        try { held.Dispose(); } catch { }
+
+        try {
+            Process.Start(new ProcessStartInfo(exe) { WorkingDirectory = Path.GetDirectoryName(exe), UseShellExecute = true, WindowStyle = ProcessWindowStyle.Minimized });
+            Thread.Sleep(cfg.WakeKickSeconds * 1000);
+        } catch (Exception e) {
+            Log("wake kick: could not start DigiDraw: " + e.Message);
+        } finally {
+            foreach (var name in new[] { "TuringTablet", "TuringDriver", "TabletServer" })
+                foreach (var p in Process.GetProcessesByName(name)) { try { p.Kill(); } catch (Exception e) { Log("wake kick: could not close " + name + ": " + e.Message); } }
+            Thread.Sleep(2000);
+        }
+        Log("wake kick: done");
+        return true;
     }
 
     void SetConnected(bool on) {
