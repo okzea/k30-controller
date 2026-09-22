@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Built and published the same way as DicTray's Windows helpers: see ../build.ps1 -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <UseWindowsForms>true</UseWindowsForms>
+    <UseWPF>true</UseWPF>
+    <AssemblyName>K30</AssemblyName>
+    <RootNamespace>K30Controller</RootNamespace>
+    <ApplicationIcon>app.ico</ApplicationIcon>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <Product>K30 Controller</Product>
+    <AssemblyTitle>K30 Controller</AssemblyTitle>
+    <Description>Tray controller for the Turing KeyDial K30</Description>
+    <Company>okzea</Company>
+    <Authors>okzea</Authors>
+    <Copyright>Copyright (c) 2026 okzea</Copyright>
+    <Version>1.3.0</Version>
+  </PropertyGroup>
+</Project>

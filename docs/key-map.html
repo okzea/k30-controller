@@ -1,0 +1,213 @@
+<title>K30 Key Map</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+  :root {
+    --bg: #eceef1;
+    --panel: #ffffff;
+    --ink: #1a1d21;
+    --muted: #5b636d;
+    --line: #c6ccd3;
+    --device: #26292d;
+    --device-rim: #3b3f45;
+    --key: #43474d;
+    --key-edge: #5a5f66;
+    --key-ink: #e9ebee;
+    --dial-face: #1c1e21;
+    --dial-ring: #8d939a;
+    --accent: #df5a1f;
+    --accent-soft: #fbe6dc;
+    --lead: #9aa1a9;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #121416; --panel: #1c1f22; --ink: #e8eaed; --muted: #9ba3ad; --line: #353a40;
+      --device: #2c3035; --device-rim: #474c53; --key: #50555c; --key-edge: #666c74; --key-ink: #f0f2f4;
+      --dial-face: #17191b; --dial-ring: #7d848c; --accent: #f06d33; --accent-soft: #3a2519; --lead: #5f666e;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #121416; --panel: #1c1f22; --ink: #e8eaed; --muted: #9ba3ad; --line: #353a40;
+    --device: #2c3035; --device-rim: #474c53; --key: #50555c; --key-edge: #666c74; --key-ink: #f0f2f4;
+    --dial-face: #17191b; --dial-ring: #7d848c; --accent: #f06d33; --accent-soft: #3a2519; --lead: #5f666e;
+  }
+
+  body { background: var(--bg); color: var(--ink); font-family: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif; font-size: 15px; line-height: 1.5; }
+  .wrap { max-width: 1040px; margin: 0 auto; padding-inline: 20px; padding-block: 28px 48px; display: grid; gap: 22px; }
+  header { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 14px; }
+  h1 { font-size: 26px; font-weight: 600; margin: 0; letter-spacing: -0.01em; text-wrap: balance; }
+  header p { margin: 4px 0 0; color: var(--muted); max-width: 60ch; }
+
+  .seg { display: inline-flex; background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 3px; gap: 2px; }
+  .seg button { font: 500 14px "IBM Plex Sans", system-ui, sans-serif; color: var(--muted); background: transparent; border: 0; border-radius: 999px; padding: 7px 16px; cursor: pointer; }
+  .seg button[aria-pressed="true"] { background: var(--ink); color: var(--bg); }
+  .seg button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .stage { overflow-x: auto; }
+  .stage svg { display: block; width: 100%; min-width: 620px; max-width: 900px; margin: 0 auto; height: auto; }
+
+  svg text { font-family: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif; }
+  .body { fill: var(--device); stroke: var(--device-rim); stroke-width: 2; }
+  .ring { fill: none; stroke: var(--dial-ring); stroke-width: 10; }
+  .ring-in { fill: var(--dial-face); stroke: #000; stroke-opacity: .35; stroke-width: 2; }
+  .key { fill: var(--key); stroke: var(--key-edge); stroke-width: 1.5; }
+  .key.hot { stroke: var(--accent); stroke-width: 3; }
+  .keytxt { fill: var(--key-ink); font: 600 17px "IBM Plex Mono", Consolas, monospace; text-anchor: middle; dominant-baseline: central; }
+  .roller { fill: #6d737a; stroke: var(--key-edge); }
+  .knurl { stroke: #2b2e32; stroke-width: 1.4; }
+  .lead { stroke: var(--lead); stroke-width: 1.3; fill: none; }
+  .lead.hot { stroke: var(--accent); stroke-width: 2; }
+  .dot { fill: var(--lead); }
+  .dot.hot { fill: var(--accent); }
+  .lbl { fill: var(--panel); stroke: var(--line); stroke-width: 1.2; }
+  .lbl.hot { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.8; }
+  .tag { fill: var(--muted); font: 600 12px "IBM Plex Mono", Consolas, monospace; letter-spacing: .04em; }
+  .tag.hot { fill: var(--accent); }
+  .act { fill: var(--ink); font-weight: 600; font-size: 15px; }
+  .det { fill: var(--muted); font-size: 12.5px; }
+
+  .notes { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+  .note { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; }
+  .note h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 0 8px; font-weight: 600; }
+  .note ol, .note ul { margin: 0; padding-left: 20px; display: grid; gap: 6px; }
+  .modes { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .chip { font: 500 13px "IBM Plex Sans", system-ui, sans-serif; border: 1px solid var(--line); border-radius: 999px; padding: 3px 11px; }
+  .chip.gone { text-decoration: line-through; color: var(--muted); }
+  .arrow { color: var(--muted); }
+  kbd { font: 600 12.5px "IBM Plex Mono", Consolas, monospace; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 16px; color: var(--muted); font-size: 13px; }
+  .legend span::before { content: ""; display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; border: 1.8px solid var(--accent); background: var(--accent-soft); }
+</style>
+
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Turing KeyDial K30 — key map</h1>
+      <p>Where each key sits on the device and what it does by default. To change a key, right-click the tray icon, choose <b>Edit config</b>, then <b>Reload config</b>.</p>
+    </div>
+  </header>
+
+  <div class="stage">
+    <svg id="map" viewBox="0 0 820 740" role="img" aria-label="Diagram of the K30 with a label for each control"></svg>
+  </div>
+
+  <div class="notes">
+    <div class="note">
+      <h2>Dial modes (press the dial to cycle)</h2>
+      <div class="modes" id="modes"></div>
+    </div>
+    <div class="note">
+      <h2>Using the dial</h2>
+      <ul>
+        <li><b>Model</b>: turn to pick a model; it switches when you stop. If Claude asks “Switch model?”, press the dial to confirm, or K3 (<kbd>Esc</kbd>) to cancel.</li>
+        <li><b>Effort</b>: turning moves Claude’s effort slider, from Low to Ultracode.</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<script>
+  // Device geometry (viewBox units)
+  const KEYS = {
+    K1: { x: 292, y: 300, w: 56, h: 70 }, K2: { x: 292, y: 375, w: 56, h: 70 },
+    K3: { x: 292, y: 450, w: 56, h: 70 }, K4: { x: 292, y: 525, w: 56, h: 70 },
+    K5: { x: 472, y: 300, w: 56, h: 70 }, K6: { x: 472, y: 375, w: 56, h: 70 },
+    K7: { x: 472, y: 450, w: 56, h: 70 }, K8: { x: 472, y: 525, w: 56, h: 70 },
+    K9: { x: 378, y: 398, w: 64, h: 72 }, K10: { x: 378, y: 475, w: 64, h: 72 },
+  };
+  const DIAL = { cx: 410, cy: 172, r: 112 };
+
+  // Labels: side, label centre y, anchor point on the device, and both mappings
+  const LABELS = [
+    { id: "turn",  tag: "DIAL ↻", side: "L", y: 118, ax: DIAL.cx - DIAL.r, ay: DIAL.cy - 10,
+      now: ["Turn", "Model · Effort"] },
+    { id: "press", tag: "DIAL ●", side: "L", y: 186, ax: DIAL.cx, ay: DIAL.cy,
+      now: ["Press", "next mode · confirms model switch"] },
+    { id: "roll",  tag: "ROLLER", side: "R", y: 250, ax: 410, ay: 318,
+      now: ["Switch windows", "Alt-Tab · ↓ next, ↑ previous"] },
+    { id: "K1",  tag: "K1",  side: "L", y: 318, now: ["Push-to-talk", "holds Ctrl+Space"] },
+    { id: "K2",  tag: "K2",  side: "L", y: 388, now: ["Enter", "hold: Ctrl+Enter (queue)"] },
+    { id: "K9",  tag: "K9",  side: "L", y: 458, now: ["Previous session", "or tab · Ctrl+Shift+Tab"] },
+    { id: "K3",  tag: "K3",  side: "L", y: 528, now: ["Stop / cancel", "Esc"] },
+    { id: "K4",  tag: "K4",  side: "L", y: 598, now: ["Clear field", "Ctrl+A, then Backspace"] },
+    { id: "K11", tag: "K11", side: "L", y: 668, ax: 410, ay: 622, now: ["Enter", "hold: Ctrl+Enter (queue)"] },
+    { id: "K5",  tag: "K5",  side: "R", y: 318, now: ["New session", "Ctrl+N"] },
+    { id: "K6",  tag: "K6",  side: "R", y: 388, now: ["Model menu", "opens Claude’s model picker"] },
+    { id: "K7",  tag: "K7",  side: "R", y: 458, now: ["Effort panel", "opens Claude’s effort slider"] },
+    { id: "K10", tag: "K10", side: "R", y: 528, now: ["Next session", "or tab · Ctrl+Tab"] },
+    { id: "K8",  tag: "K8",  side: "R", y: 598, now: ["Fast mode", "Ctrl+Alt+F"] },
+  ];
+
+  const NS = "http://www.w3.org/2000/svg";
+  const svg = document.getElementById("map");
+  const el = (name, attrs, parent = svg) => {
+    const n = document.createElementNS(NS, name);
+    for (const k in attrs) n.setAttribute(k, attrs[k]);
+    parent.appendChild(n);
+    return n;
+  };
+
+  const view = "now";
+
+  function changed(l) { return !!l.prop && (l.prop[0] !== l.now[0] || l.prop[1] !== l.now[1]); }
+
+  function draw() {
+    svg.textContent = "";
+    const hotKeys = new Set(LABELS.filter(changed).map(l => l.id));
+
+    // body + dial
+    el("rect", { class: "body", x: 270, y: 44, width: 280, height: 642, rx: 140 });
+    el("circle", { class: "ring", cx: DIAL.cx, cy: DIAL.cy, r: DIAL.r - 6 });
+    el("circle", { class: "ring-in", cx: DIAL.cx, cy: DIAL.cy, r: DIAL.r - 20 });
+
+    // keys
+    for (const [id, k] of Object.entries(KEYS)) {
+      el("rect", { class: "key" + (hotKeys.has(id) ? " hot" : ""), x: k.x, y: k.y, width: k.w, height: k.h, rx: 12 });
+      const t = el("text", { class: "keytxt", x: k.x + k.w / 2, y: k.y + k.h / 2 });
+      t.textContent = id;
+    }
+    // K11 (bottom arc key)
+    el("path", { class: "key", d: "M354 604 Q410 588 466 604 L456 638 Q410 648 364 638 Z" });
+    const t11 = el("text", { class: "keytxt", x: 410, y: 620 });
+    t11.textContent = "K11";
+
+    // roller with knurling
+    el("rect", { class: "roller", x: 392, y: 300, width: 36, height: 80, rx: 10 });
+    for (let y = 308; y <= 372; y += 6) el("line", { class: "knurl", x1: 396, y1: y, x2: 424, y2: y });
+
+    // labels + leader lines
+    const W = 218, H = 50;
+    for (const l of LABELS) {
+      const hot = view === "prop" && changed(l);
+      const [act, det] = (view === "prop" && l.prop) ? l.prop : l.now;
+      let ax = l.ax, ay = l.ay;
+      if (ax === undefined) { const k = KEYS[l.id]; ax = k.x + k.w / 2; ay = k.y + k.h / 2; }
+      const bx = l.side === "L" ? 24 : 820 - 24 - W;
+      const ex = l.side === "L" ? bx + W : bx;
+      el("path", { class: "lead" + (hot ? " hot" : ""), d: `M${ex} ${l.y} L${ex + (l.side === "L" ? 18 : -18)} ${l.y} L${ax} ${ay}` });
+      el("circle", { class: "dot" + (hot ? " hot" : ""), cx: ax, cy: ay, r: 3.5 });
+      el("rect", { class: "lbl" + (hot ? " hot" : ""), x: bx, y: l.y - H / 2, width: W, height: H, rx: 8 });
+      const tag = el("text", { class: "tag" + (hot ? " hot" : ""), x: bx + 12, y: l.y - 5 });
+      tag.textContent = l.tag;
+      const a = el("text", { class: "act", x: bx + 12 + (l.tag.length > 3 ? 58 : 36), y: l.y - 5 });
+      a.textContent = act;
+      const d = el("text", { class: "det", x: bx + 12, y: l.y + 15 });
+      d.textContent = hot ? det + " · was " + l.now[0] : det;
+    }
+
+    // dial modes
+    const modes = document.getElementById("modes");
+    modes.textContent = "";
+    const list = [["Model", false], ["Effort", false]];
+    list.forEach(([name, gone], i) => {
+      if (i) { const s = document.createElement("span"); s.className = "arrow"; s.textContent = "→"; modes.appendChild(s); }
+      const c = document.createElement("span");
+      c.className = "chip" + (gone ? " gone" : "");
+      c.textContent = name + (gone ? " (moves to K9/K10)" : "");
+      modes.appendChild(c);
+    });
+
+  }
+
+  draw();
+</script>

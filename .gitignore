@@ -1,0 +1,13 @@
+bin/
+obj/
+publish/
+.vs/
+*.user
+
+# local runtime files (written next to K30.exe)
+k30-config.json
+k30-config.json.bak
+k30.log
+
+# local investigation leftovers
+.scratch/
