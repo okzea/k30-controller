@@ -91,8 +91,7 @@ class Config {
     ""K8"":  ""ctrl+alt+f"",
     ""K9"":  ""ctrl+shift+tab"",
     ""K10"": ""ctrl+tab"",
-    ""K11"": ""enter"",
-    ""K11:long"": ""ctrl+enter"",
+    ""K11"": ""tab"",
     ""Dial"": ""nextMode""
   },
 

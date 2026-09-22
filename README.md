@@ -19,7 +19,7 @@ For a diagram of where each key sits, open [`docs/key-map.html`](docs/key-map.ht
 | **K7** | Archive the session (`Ctrl+Alt+A`) |
 | **K8** | Fast mode (`Ctrl+Alt+F`) |
 | **K9 / K10** | Previous / next session or tab (`Ctrl+Shift+Tab` / `Ctrl+Tab`) |
-| **K11** | `Enter` · hold: `Ctrl+Enter` |
+| **K11** | `Tab` (accept Claude's suggested reply) |
 | **Roller** | Window switcher (up: next window, down: previous). Alt stays held while rolling, released when you stop |
 | **Dial button** | Next dial mode · confirms Claude's "Switch model?" prompt |
 | **Dial: Model** | Turn to pick a model (shown in the pop-up); it is selected when you stop |
