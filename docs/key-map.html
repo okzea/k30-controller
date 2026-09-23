@@ -120,7 +120,7 @@
   // Labels: side, label centre y, anchor point on the device, and both mappings
   const LABELS = [
     { id: "turn",  tag: "DIAL ↻", side: "L", y: 118, ax: DIAL.cx - DIAL.r, ay: DIAL.cy - 10,
-      now: ["Turn", "Model · Effort"] },
+      now: ["Turn", "Effort · Model"] },
     { id: "press", tag: "DIAL ●", side: "L", y: 186, ax: DIAL.cx, ay: DIAL.cy,
       now: ["Press", "next mode · confirms model switch"] },
     { id: "roll",  tag: "ROLLER", side: "R", y: 250, ax: 410, ay: 318,
@@ -198,7 +198,7 @@
     // dial modes
     const modes = document.getElementById("modes");
     modes.textContent = "";
-    const list = [["Model", false], ["Effort", false]];
+    const list = [["Effort", false], ["Model", false]];
     list.forEach(([name, gone], i) => {
       if (i) { const s = document.createElement("span"); s.className = "arrow"; s.textContent = "→"; modes.appendChild(s); }
       const c = document.createElement("span");

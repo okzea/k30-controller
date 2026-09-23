@@ -90,6 +90,8 @@ class ShortcutField : Grid {
     public string AccessibleName { set { AutomationProperties.SetName(box, value); AutomationProperties.SetName(rec, "Record " + value); } }
     public string Problem { get { return check(Value); } }
 
+    public void FocusAndSelect() { box.Focus(); box.SelectAll(); }
+
     public ShortcutField(string value, string placeholder, Func<string, string> check) {
         this.placeholder = placeholder ?? "";
         this.check = check;
@@ -199,10 +201,14 @@ class SettingsWindow : Window {
 
     ListBox profileList;
     ScrollViewer editorHost;
+    DeviceView device;
+    readonly Dictionary<string, KeyRow> keyRows = new Dictionary<string, KeyRow>(StringComparer.OrdinalIgnoreCase);
+    string hoverKey, deviceHover, focusKey;
+    SolidColorBrush rowHighlight;
     ComboBox addAppBox;
     Button removeAppButton;
     ListBox shownList, hiddenList;
-    RadioButton unsortedShow, unsortedHide;
+    RadioButton unsortedShow, unsortedHide, historyOnLeft;
     Slider commitSlider;
     TextBox addressBox, longPressBox, doublePressBox, addNameBox;
     TextBlock status;
@@ -218,7 +224,7 @@ class SettingsWindow : Window {
 
         Title = "K30 Controller settings";
         ThemeMode = ThemeMode.System;
-        Width = 1000; Height = 740; MinWidth = 820; MinHeight = 520;
+        Width = 1320; Height = 760; MinWidth = 1040; MinHeight = 560;
         try { Icon = ToImage(System.Drawing.Icon.ExtractAssociatedIcon(Environment.ProcessPath)); } catch { }
 
         building = true;
@@ -419,8 +425,10 @@ class SettingsWindow : Window {
     // ---------------------------------------------------------------- Buttons & dial
 
     UIElement BuildKeysTab() {
-        var grid = Columns(Px(230), Star());
+        var grid = Columns(Px(230), Px(240), Star());
         grid.Margin = new Thickness(0, 16, 0, 0);
+        rowHighlight = new SolidColorBrush(Color.FromArgb(0x38, AccentColor().R, AccentColor().G, AccentColor().B));
+        rowHighlight.Freeze();
 
         var left = new DockPanel { Margin = new Thickness(0, 0, 20, 0) };
         var add = new StackPanel { Margin = new Thickness(0, 12, 0, 0) };
@@ -444,9 +452,77 @@ class SettingsWindow : Window {
         Place(grid, left, 0, 0);
 
         editorHost = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
-        Place(grid, editorHost, 0, 1);
+        Place(grid, editorHost, 0, 2);
+
+        // The K30 itself, between the app list and the fields: hovering a field lights up its key,
+        // clicking a key jumps to its field.
+        var middle = new DockPanel { Margin = new Thickness(0, 0, 24, 0) };
+        var hint = Caption("Point at a field to find its key. Click a key to jump to its shortcut.");
+        hint.TextAlignment = TextAlignment.Center;
+        hint.Margin = new Thickness(0, 0, 0, 12);
+        DockPanel.SetDock(hint, Dock.Bottom);
+        middle.Children.Add(hint);
+        device = new DeviceView(AccentColor()) { VerticalAlignment = VerticalAlignment.Top };
+        device.PartHovered += id => { deviceHover = id; UpdateHighlight(); };
+        device.PartClicked += JumpTo;
+        middle.Children.Add(device);
+        Place(grid, middle, 0, 1);
+
         profileList.SelectedIndex = 0;
         return grid;
+    }
+
+    /// Windows' accent colour, in its light variant (the K30 drawing is dark in both themes).
+    static Color AccentColor() {
+        try {
+            var c = new global::Windows.UI.ViewManagement.UISettings().GetColorValue(global::Windows.UI.ViewManagement.UIColorType.AccentLight2);
+            return Color.FromRgb(c.R, c.G, c.B);
+        } catch { return Color.FromRgb(0x99, 0xEB, 0xFF); }
+    }
+
+    /// One control's place on the Buttons & dial page: its row (highlighted with the key), the field
+    /// a click on the key focuses, and what to scroll into view.
+    class KeyRow { public Border Back; public ShortcutField Field; public FrameworkElement Anchor; }
+
+    // Which K30 control is lit: the one under the mouse (a field or the drawing) wins over the focused field.
+    void UpdateHighlight() {
+        string id = hoverKey ?? deviceHover ?? focusKey;
+        device.Highlight(id);
+        foreach (var kv in keyRows)
+            if (kv.Value.Back != null)
+                kv.Value.Back.Background = string.Equals(kv.Key, id, StringComparison.OrdinalIgnoreCase) ? rowHighlight : Brushes.Transparent;
+    }
+
+    void JumpTo(string id) {
+        KeyRow row;
+        if (!keyRows.TryGetValue(id, out row)) return;
+        row.Anchor.BringIntoView();
+        if (row.Field != null && row.Field.IsEnabled) row.Field.FocusAndSelect();
+        focusKey = id;
+        UpdateHighlight();
+    }
+
+    /// Links a row's elements to a K30 control: pointing at any of them lights the control up, and
+    /// focus inside a field keeps it lit.
+    void Link(string id, KeyRow row, params FrameworkElement[] hoverables) {
+        keyRows[id] = row;
+        foreach (var e in hoverables) {
+            e.MouseEnter += (s, a) => { hoverKey = id; UpdateHighlight(); };
+            e.MouseLeave += (s, a) => { if (hoverKey == id) { hoverKey = null; UpdateHighlight(); } };
+            e.IsKeyboardFocusWithinChanged += (s, a) => {
+                if ((bool)a.NewValue) focusKey = id;
+                else if (focusKey == id) focusKey = null;
+                UpdateHighlight();
+            };
+        }
+    }
+
+    static Border RowBack(Grid g, int row, int span) {
+        var b = new Border { Background = Brushes.Transparent, CornerRadius = new CornerRadius(6), Margin = new Thickness(-6, 0, -2, 0) };
+        Grid.SetRow(b, row);
+        Grid.SetColumnSpan(b, span);
+        g.Children.Insert(0, b);
+        return b;
     }
 
     ListBoxItem ProfileItem(ProfileModel p) {
@@ -518,6 +594,8 @@ class SettingsWindow : Window {
         bool app = p.Process != null;
         var def = Defaults;
         var panel = new StackPanel { Margin = new Thickness(0, 0, 16, 24) };
+        keyRows.Clear();
+        hoverKey = focusKey = null;
 
         panel.Children.Add(PageTitle(app ? p.Label : "All apps"));
         panel.Children.Add(Caption(app
@@ -548,6 +626,8 @@ class SettingsWindow : Window {
             var name = new TextBlock { Text = key == "Dial" ? "Dial button" : key, VerticalAlignment = VerticalAlignment.Center, FontWeight = FontWeights.SemiBold };
             if (key == "K1") name.ToolTip = "Push-to-talk: the same in every app";
             Place(g, name, r, 0);
+            var back = RowBack(g, r, 4);
+            var fields = new List<FrameworkElement> { back, name };
             for (int c = 0; c < Suffixes.Length; c++) {
                 string k = key + Suffixes[c];
                 string val, dv;
@@ -560,7 +640,9 @@ class SettingsWindow : Window {
                 if (locked) { f.IsEnabled = false; f.ToolTip = "Push-to-talk is the same in every app"; ToolTipService.SetShowOnDisabled(f, true); }
                 f.Changed += v => { if (v.Length == 0) p.Keys.Remove(k); else p.Keys[k] = v; Dirty(); };
                 Place(g, f, r, c + 1);
+                fields.Add(f);
             }
+            Link(key, new KeyRow { Back = back, Field = (ShortcutField)fields[2], Anchor = back }, fields.ToArray());
         }
         panel.Children.Add(g);
         panel.Children.Add(Caption(
@@ -569,9 +651,12 @@ class SettingsWindow : Window {
             "A long or double press action makes the plain press fire on release.", 8));
 
         // roller
-        panel.Children.Add(Section("Roller"));
+        var rollerHeader = Section("Roller");
+        panel.Children.Add(rollerHeader);
         if (app) {
-            panel.Children.Add(Caption("The roller and K1 (push-to-talk) are the same in every app, so you can always switch away and talk."));
+            var note = Caption("The roller and K1 (push-to-talk) are the same in every app, so you can always switch away and talk.");
+            panel.Children.Add(note);
+            Link("Roller", new KeyRow { Anchor = note }, rollerHeader, note);
         } else {
             var rg = Columns(Px(110), Star(), Star());
             int h2 = AddRow(rg);
@@ -584,26 +669,34 @@ class SettingsWindow : Window {
             down.Changed += v => { rollerDown = v; Dirty(); };
             Place(rg, up, rr, 1);
             Place(rg, down, rr, 2);
+            var rollerBack = RowBack(rg, rr, 3);
+            Link("Roller", new KeyRow { Back = rollerBack, Field = up, Anchor = rollerBack }, rollerBack, rollerHeader, up, down);
             panel.Children.Add(rg);
             panel.Children.Add(Caption("switch:next / switch:prev: K30 Controller's window switcher (see the Window switcher tab). alttab:next / alttab:prev: Windows' own Alt-Tab. Or any shortcut, or wheel+1 / wheel-1.", 8));
         }
 
-        // dial modes
-        panel.Children.Add(Section("Dial modes"));
+        // dial modes: what turning the dial does, so they belong to the dial's ring on the drawing
+        var modesHeader = Section("Dial modes");
+        panel.Children.Add(modesHeader);
+        var modes = new StackPanel();
+        var modesBack = new Border { Child = modes, Background = Brushes.Transparent, CornerRadius = new CornerRadius(6), Padding = new Thickness(6), Margin = new Thickness(-6, 0, -6, 0) };
+        panel.Children.Add(modesBack);
         if (app && p.Modes.Count == 0) {
-            panel.Children.Add(Caption(p.Label + " uses the default dial modes: " + string.Join(", ", def.Modes.Select(m => Str(m, "name") ?? "?")) + "."));
+            modes.Children.Add(Caption(p.Label + " uses the default dial modes: " + string.Join(", ", def.Modes.Select(m => Str(m, "name") ?? "?")) + "."));
             var own = new Button { Content = "Give " + p.Label + " its own dial modes", HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 10, 0, 0) };
             own.Click += (s, e) => { p.Modes.Add(NewMode()); Dirty(); ShowProfile(); };
-            panel.Children.Add(own);
+            modes.Children.Add(own);
         } else {
-            panel.Children.Add(Caption("Press the dial button to go to the next mode; the pop-up says which one is active." + (app ? " Remove them all to go back to the default modes." : "")));
-            panel.Children.Add(BuildModes(p));
+            modes.Children.Add(Caption("Turn the dial to use the active mode; press the dial button to go to the next one. The pop-up says which one is active." + (app ? " Remove them all to go back to the default modes." : "")));
+            modes.Children.Add(BuildModes(p));
             var addMode = new Button { Content = "Add a dial mode", HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 10, 0, 0) };
             addMode.Click += (s, e) => { p.Modes.Add(NewMode()); Dirty(); ShowProfile(); };
-            panel.Children.Add(addMode);
+            modes.Children.Add(addMode);
         }
+        Link("DialRing", new KeyRow { Back = modesBack, Anchor = modesHeader }, modesHeader, modesBack);
 
         editorHost.Content = panel;
+        UpdateHighlight();
         building = wasBuilding;
     }
 
@@ -612,7 +705,7 @@ class SettingsWindow : Window {
     }
 
     UIElement BuildModes(ProfileModel p) {
-        var g = Columns(Px(130), Px(150), Star(), Star(), Px(90), Px(120), Auto);
+        var g = Columns(Px(120), Px(140), Star(), Star(), Px(84), Px(116), Auto);
         g.Margin = new Thickness(0, 10, 0, 0);
         int hr = AddRow(g);
         Place(g, Header("Name"), hr, 0);
@@ -776,6 +869,20 @@ class SettingsWindow : Window {
         radios.Children.Add(unsortedShow);
         radios.Children.Add(unsortedHide);
         more.Children.Add(radios);
+
+        more.Children.Add(Section("Order"));
+        more.Children.Add(Caption("The highlight always moves the way you roll. What changes is where the windows you used before the current one sit:"));
+        var order = new StackPanel { Margin = new Thickness(0, 8, 0, 0) };
+        var hv = sw == null ? null : sw["historyOnLeft"] as JsonValue;
+        bool historyLeft;
+        if (hv == null || !hv.TryGetValue(out historyLeft)) historyLeft = true;
+        historyOnLeft = new RadioButton { Content = "On the left, like a browser's Back and Forward: rolling left goes back, rolling right comes forward again, and windows stay where you left them", IsChecked = historyLeft, Margin = new Thickness(0, 0, 0, 6) };
+        var historyRight = new RadioButton { Content = "On the right, like Alt-Tab: most recent first, reordered after every switch", IsChecked = !historyLeft };
+        historyOnLeft.Checked += (s, e) => Dirty();
+        historyRight.Checked += (s, e) => Dirty();
+        order.Children.Add(historyOnLeft);
+        order.Children.Add(historyRight);
+        more.Children.Add(order);
 
         more.Children.Add(Section("Timing"));
         commitSlider = new Slider { Minimum = 150, Maximum = 1500, TickFrequency = 50, IsSnapToTickEnabled = true, Width = 320, Value = Int(sw, "commitMs") ?? 400, VerticalAlignment = VerticalAlignment.Center };
@@ -963,6 +1070,7 @@ class SettingsWindow : Window {
         sw["mode"] = allow ? "allow" : "block";
         sw["apps"] = new JsonArray((allow ? shownList : hiddenList).Items.Cast<ListBoxItem>().Select(i => (JsonNode)JsonValue.Create((string)i.Tag)).ToArray());
         sw["commitMs"] = (int)commitSlider.Value;
+        sw["historyOnLeft"] = historyOnLeft.IsChecked == true;
         root["switcher"] = sw;
 
         root["dialModes"] = ModesNode(def.Modes);

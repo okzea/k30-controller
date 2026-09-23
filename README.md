@@ -22,8 +22,8 @@ For a diagram of where each key sits, open [`docs/key-map.html`](docs/key-map.ht
 | **K11** | `Tab` (accept Claude's suggested reply) |
 | **Roller** | Window switcher (up: next window, down: previous), see below |
 | **Dial button** | Next dial mode · confirms Claude's "Switch model?" prompt |
+| **Dial: Effort** (default) | Moves Claude's effort slider, Low → Ultracode |
 | **Dial: Model** | Turn to pick a model (shown in the pop-up); it is selected when you stop |
-| **Dial: Effort** | Moves Claude's effort slider, Low → Ultracode |
 
 After any model or effort change, keyboard focus goes back to Claude's message box, so dictation and typing land where you expect.
 
@@ -31,7 +31,7 @@ A pop-up (styled after DicTray's voice overlay) shows the current mode and chang
 
 ## Window switcher
 
-The roller has its own switcher rather than Windows' Alt-Tab. The first click shows the list of open windows on every monitor, so it's in front of you wherever you're looking. It's laid out like macOS's app switcher: a row of large icons with each app's name underneath. It scrolls sideways when there are more windows than fit. Each further click moves the highlight, and it switches once you stop rolling (after 400 ms by default). The dial button switches immediately, and any other key cancels.
+The roller has its own switcher rather than Windows' Alt-Tab. The first click shows the list of open windows on every monitor, so it's in front of you wherever you're looking. It's laid out like macOS's app switcher: a row of large icons with each app's name underneath. It scrolls sideways when there are more windows than fit. By default it's laid out as a timeline, like a browser's Back and Forward. The present is on the right, the windows you went to before it are to the left, and the highlight moves the way you roll. Moving with the roller never reorders the timeline, so rolling back to a window and then forward returns you where you were. Only going to a window some other way (a click, the taskbar, Alt-Tab) moves it to the present end. The ends don't wrap around, and a dot marks the window you're in. Choose Alt-Tab's order instead (most recent on the left) in **Settings → Window switcher → Order**. Each further click moves the highlight, and it switches once you stop rolling (after 400 ms by default). The dial button switches immediately, and any other key cancels.
 
 You choose which apps it offers. In **Settings → Window switcher**, drag apps between *Shown* and *Hidden*, and decide whether apps in neither list (ones you open later) are shown or hidden.
 
@@ -73,7 +73,7 @@ Quit DigiDraw and disable its startup entry (Task Manager → Startup apps → T
 
 To open **Settings**, use the tray menu, double-click the tray icon, or launch `K30.exe` again while it runs. It has three pages:
 
-- **Buttons & dial**: every key's press, long press and double press, the roller and the dial modes, for all apps or for one app. A record button captures a shortcut from the keyboard.
+- **Buttons & dial**: every key's press, long press and double press, the roller and the dial modes, for all apps or for one app. A record button captures a shortcut from the keyboard. A picture of the K30 beside the fields lights up the key for the field you point at, and clicking a key jumps to its shortcut.
 - **Window switcher**: the drag-and-drop lists described above.
 - **General**: the device address and the press timings.
 

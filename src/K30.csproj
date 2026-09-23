@@ -20,4 +20,8 @@
     <Copyright>Copyright (c) 2026 okzea</Copyright>
     <Version>1.10.0</Version>
   </PropertyGroup>
+  <ItemGroup>
+    <!-- The K30 picture on the settings window's Buttons & dial page -->
+    <EmbeddedResource Include="k30.png" LogicalName="k30.png" />
+  </ItemGroup>
 </Project>

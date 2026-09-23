@@ -84,6 +84,7 @@ class Config {
     public string SwitcherMode = "block";   // "allow": only SwitcherApps; anything else: everything except SwitcherApps
     public HashSet<string> SwitcherApps = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
     public int SwitcherCommitMs = 400;
+    public bool SwitcherHistoryOnLeft = true; // false: Alt-Tab's order, most recent window first on the left
     public int LongPressMs = 450, DoublePressMs = 300;
     public string DigiDrawPath = @"%APPDATA%\TuringTablet\TuringTablet.exe";
     public int WakeKickSeconds = 0;
@@ -126,13 +127,13 @@ class Config {
   ""rollerIdleMs"": 350,
   ""roller"": { ""up"": ""switch:next"", ""down"": ""switch:prev"" },
 
-  ""_help_switcher"": ""The roller's window switcher. Its list appears on every monitor; each roller click moves the highlight, and it switches commitMs after the last click (the dial button switches right away; any other key cancels). mode 'allow': only windows of the apps in 'apps'. mode 'block': every window except those apps. Apps are process names as in appProfiles (Task Manager > Details, without '.exe'), e.g. claude, vivaldi, olk, chatgpt, WindowsTerminal."",
-  ""switcher"": { ""mode"": ""block"", ""apps"": [], ""commitMs"": 400 },
+  ""_help_switcher"": ""The roller's window switcher. Its list appears on every monitor; each roller click moves the highlight the way you roll (switch:next right, switch:prev left), and it switches commitMs after the last click (the dial button switches right away; any other key cancels). historyOnLeft true: a timeline like a browser's Back/Forward, the present on the right and the windows you went to before it going left; rolling never reorders it, so back then forward returns you where you were, and only going to a window another way (click, taskbar) moves it to the present end. false: Alt-Tab's order, wrapping around. mode 'allow': only windows of the apps in 'apps'. mode 'block': every window except those apps. Apps are process names as in appProfiles (Task Manager > Details, without '.exe'), e.g. claude, vivaldi, olk, chatgpt, WindowsTerminal."",
+  ""switcher"": { ""mode"": ""block"", ""apps"": [], ""commitMs"": 400, ""historyOnLeft"": true },
 
   ""_help_dialModes"": ""type 'keys': cw/ccw sent per click. type 'alttab': holds Alt while turning. type 'claude-model': turn to pick a model, it is selected when the dial rests for idleMs (press the dial to confirm Claude's 'Switch model?' prompt). type 'claude-effort': moves Claude's effort slider; 'max' is the highest step reachable (0 Low, 1 Medium, 2 High, 3 Extra, 4 Max, 5 Ultracode). type 'menu': first click sends 'open', next clicks send cw/ccw, 'confirm' is sent when the dial rests."",
   ""dialModes"": [
-    { ""name"": ""Model"",           ""type"": ""claude-model"",  ""idleMs"": 900 },
-    { ""name"": ""Effort"",          ""type"": ""claude-effort"", ""idleMs"": 1200, ""max"": 5 }
+    { ""name"": ""Effort"",          ""type"": ""claude-effort"", ""idleMs"": 1200, ""max"": 5 },
+    { ""name"": ""Model"",           ""type"": ""claude-model"",  ""idleMs"": 900 }
   ],
 
   ""_help_appProfiles"": ""Per-application overrides, keyed by the process name Task Manager's Details tab shows (no '.exe'). While that process has focus: its 'keys' override the ones above for the same key, and its 'dialModes', if it has any, replace the dial's mode list. Re-checked each time you turn or press the dial, so switching apps mid-gesture is safe. K1 (push-to-talk) and the roller have no per-app override at all — they always use the mapping above, everywhere."",
@@ -227,6 +228,7 @@ class Config {
                         }
                 JsonElement cm;
                 if (sw.TryGetProperty("commitMs", out cm) && cm.ValueKind == JsonValueKind.Number) c.SwitcherCommitMs = cm.GetInt32();
+                if (sw.TryGetProperty("historyOnLeft", out cm) && (cm.ValueKind == JsonValueKind.True || cm.ValueKind == JsonValueKind.False)) c.SwitcherHistoryOnLeft = cm.GetBoolean();
             }
             c.DialModes = ParseDialModes(root.GetProperty("dialModes"));
             if (c.DialModes.Count == 0) throw new Exception("dialModes is empty");
@@ -761,6 +763,59 @@ static class AppDetect {
 
 // ---------------------------------------------------------------- window switcher
 
+/// The switcher's timeline: top-level windows in the order you went to them, oldest first. Moving
+/// through it with the roller never reorders it, so rolling back and then forward returns you where
+/// you were, like a browser's Back and Forward. Only going to a window some other way (a click, the
+/// taskbar, Alt-Tab) is a new visit, which moves that window to the present end. Windows' own
+/// most-recently-used order can't do this: every switch, including the switcher's, reshuffles it.
+class SwitchHistory {
+    delegate void WinEventProc(IntPtr hook, uint ev, IntPtr hwnd, int idObject, int idChild, uint thread, uint time);
+    [DllImport("user32.dll")] static extern IntPtr SetWinEventHook(uint min, uint max, IntPtr module, WinEventProc proc, uint pid, uint tid, uint flags);
+    [DllImport("user32.dll")] static extern IntPtr GetAncestor(IntPtr h, uint flags);
+    [DllImport("user32.dll")] static extern bool IsWindow(IntPtr h);
+    [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+
+    readonly List<IntPtr> visits = new List<IntPtr>();
+    WinEventProc proc; // kept in a field so the hook's delegate isn't garbage-collected
+    IntPtr ours;       // the window the switcher is activating: its foreground event isn't a visit
+    DateTime oursAt;
+
+    /// Starts listening for foreground changes; must run on a thread with a message loop (the UI thread).
+    public void Start() {
+        proc = OnForeground;
+        SetWinEventHook(3 /* EVENT_SYSTEM_FOREGROUND */, 3, IntPtr.Zero, proc, 0, 0, 0 /* WINEVENT_OUTOFCONTEXT */);
+        Visit(GetForegroundWindow());
+    }
+
+    void OnForeground(IntPtr hook, uint ev, IntPtr hwnd, int idObject, int idChild, uint thread, uint time) {
+        if (idObject != 0 /* OBJID_WINDOW */) return;
+        var h = GetAncestor(hwnd, 3 /* GA_ROOTOWNER: a dialog counts as its app's main window */);
+        if (h == ours && (DateTime.UtcNow - oursAt).TotalSeconds < 3) { ours = IntPtr.Zero; return; }
+        Visit(h);
+    }
+
+    void Visit(IntPtr h) {
+        if (h == IntPtr.Zero) return;
+        visits.Remove(h);
+        visits.Add(h);
+        if (visits.Count > 400) visits.RemoveAt(0);
+    }
+
+    /// The switcher is about to bring this window forward: that's moving along the timeline, not a visit.
+    public void SwitchingTo(IntPtr h) { ours = h; oursAt = DateTime.UtcNow; }
+
+    /// Puts a snapshot (most recent first) in timeline order, oldest first: windows not visited since
+    /// K30 Controller started come first, in Windows' recency order, then the visited ones as visited.
+    public List<SwitchTarget> Order(List<SwitchTarget> mostRecentFirst) {
+        visits.RemoveAll(h => !IsWindow(h));
+        var byHwnd = mostRecentFirst.ToDictionary(t => t.Hwnd);
+        var visited = new HashSet<IntPtr>(visits);
+        var order = mostRecentFirst.Where(t => !visited.Contains(t.Hwnd)).Reverse().ToList();
+        foreach (var h in visits) { SwitchTarget t; if (byHwnd.TryGetValue(h, out t)) order.Add(t); }
+        return order;
+    }
+}
+
 class SwitchTarget {
     public IntPtr Hwnd;
     public string Process;  // process name without ".exe", matched against the switcher's allow/block list
@@ -930,13 +985,13 @@ class SwitcherOsd : Form {
     static readonly Color PlateTop = Color.FromArgb(62, 62, 66);
     static readonly Color PlateBottom = Color.FromArgb(40, 40, 44);
     static readonly Color PlateRim = Color.FromArgb(40, 255, 255, 255);
-    const int TileWidth = 140, TileHeight = 156, IconSize = 96, Pad = 22, MaxTiles = 9, Radius = 22;
+    const int TileWidth = 140, TileHeight = 156, IconSize = 96, Pad = 22, DotSpace = 10, MaxTiles = 9, Radius = 22;
 
     [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
     static readonly IntPtr HwndTopmost = new IntPtr(-1);
 
     List<SwitchTarget> items = new List<SwitchTarget>();
-    int selected, visible;
+    int selected, visible, current = -1; // current: the window you were in, marked with a dot
     float scale;
     Font labelFont, arrowFont, initialFont;
 
@@ -975,14 +1030,15 @@ class SwitcherOsd : Form {
 
     int S(float v) { return (int)Math.Round(v * scale); }
 
-    public void ShowList(List<SwitchTarget> list, int sel, Screen screen) {
+    public void ShowList(List<SwitchTarget> list, int sel, int current, Screen screen) {
         items = list;
         selected = sel;
+        this.current = current;
         SetScale(Osd.ScaleFor(screen));
         var area = screen.WorkingArea;
         int fit = Math.Max(1, (int)((area.Width * 0.92 - S(Pad * 2)) / S(TileWidth)));
         visible = Math.Min(items.Count, Math.Min(MaxTiles, fit));
-        int w = S(Pad * 2) + visible * S(TileWidth), h = S(Pad * 2 + TileHeight);
+        int w = S(Pad * 2) + visible * S(TileWidth), h = S(Pad * 2 + TileHeight + DotSpace);
         int x = area.X + (area.Width - w) / 2, y = area.Y + (area.Height - h) / 2;
         if (!Visible) Show();
         SetWindowPos(Handle, HwndTopmost, x, y, w, h, 0x10 | 0x40); // NOACTIVATE | SHOWWINDOW
@@ -1059,6 +1115,11 @@ class SwitcherOsd : Form {
                 }
                 var nameRect = new RectangleF(x + S(8), iconRect.Bottom + S(6), tw - S(16), th - (iconRect.Bottom - top) - S(10));
                 g.DrawString(t.Label, labelFont, i == selected ? labelBrush : dimBrush, nameRect, fmt);
+                // "You are here": a small dot under the window you were in, like the Dock's running-app dot.
+                if (i == current) {
+                    int d = S(6);
+                    g.FillEllipse(labelBrush, x + (tw - d) / 2, top + th + S(DotSpace) / 2 - d / 2 + S(2), d, d);
+                }
             }
             // More windows beyond the edges: an arrow in the margin on that side.
             if (first > 0)
@@ -1265,7 +1326,8 @@ class K30App : ApplicationContext {
     readonly List<SwitcherOsd> switchers = new List<SwitcherOsd>(); // one list per monitor, all showing the same thing
     readonly System.Windows.Forms.Timer switchTimer = new System.Windows.Forms.Timer();
     List<SwitchTarget> switchList;
-    int switchIndex;
+    int switchIndex, switchCurrent; // the highlight, and the window you were in when the list opened (-1: none)
+    readonly SwitchHistory history = new SwitchHistory();
     bool switchActive;
 
     public K30App() {
@@ -1286,6 +1348,7 @@ class K30App : ApplicationContext {
         Log("started");
         Task.Run(() => ConnectLoop());
         ListenForOpenSettings();
+        history.Start();
     }
 
     /// A second launch of K30.exe signals this event instead of starting another instance (see Main).
@@ -1756,6 +1819,11 @@ class K30App : ApplicationContext {
         if (!switchActive) {
             IntPtr fg = WindowList.Foreground();
             var list = WindowList.Snapshot(IncludeInSwitcher);
+            // The list is kept in on-screen order, and rolling moves the highlight the way you roll
+            // (switch:next right, switch:prev left). historyOnLeft lays it out as a timeline (see
+            // SwitchHistory): the past on the left, the present on the right, with ends you can't roll
+            // past. Otherwise it's Alt-Tab's order, most recent first, wrapping around.
+            if (cfg.SwitcherHistoryOnLeft) list = history.Order(list);
             int n = list.Count;
             int cur = list.FindIndex(t => t.Hwnd == fg);
             if (n == 0 || (n == 1 && cur == 0)) {
@@ -1763,16 +1831,17 @@ class K30App : ApplicationContext {
                 return;
             }
             switchList = list;
-            switchIndex = cur < 0 ? (next ? 0 : n - 1) : ((cur + (next ? 1 : -1)) % n + n) % n;
+            switchCurrent = cur;
+            // Not in any listed window (the desktop, a hidden app): start from the present end.
+            switchIndex = cur < 0 ? (cfg.SwitcherHistoryOnLeft || !next ? n - 1 : 0) : Step(cur, next);
             switchActive = true;
             // Shown on every monitor, so it's in front of you wherever you're looking.
             var screens = Screen.AllScreens;
             while (switchers.Count < screens.Length) switchers.Add(new SwitcherOsd());
-            for (int s = 0; s < screens.Length; s++) switchers[s].ShowList(switchList, switchIndex, screens[s]);
+            for (int s = 0; s < screens.Length; s++) switchers[s].ShowList(switchList, switchIndex, cur, screens[s]);
             for (int s = screens.Length; s < switchers.Count; s++) switchers[s].Hide();
         } else {
-            int n = switchList.Count;
-            switchIndex = ((switchIndex + (next ? 1 : -1)) % n + n) % n;
+            switchIndex = Step(switchIndex, next);
             foreach (var sw in switchers) if (sw.Visible) sw.Select(switchIndex);
         }
         switchTimer.Stop();
@@ -1780,12 +1849,22 @@ class K30App : ApplicationContext {
         switchTimer.Start();
     }
 
+    /// One roller click along the list: a timeline stops at its ends (there's nothing past the present,
+    /// and wrapping round to the oldest window would break the "things stay where you left them" feel);
+    /// Alt-Tab's order wraps around.
+    int Step(int from, bool next) {
+        int n = switchList.Count, to = from + (next ? 1 : -1);
+        return cfg.SwitcherHistoryOnLeft ? Math.Max(0, Math.Min(n - 1, to)) : (to % n + n) % n;
+    }
+
     void CommitSwitch() {
         if (!switchActive) return;
         switchActive = false;
         switchTimer.Stop();
         HideSwitchers();
+        if (switchIndex == switchCurrent) return; // rolled back to where you started: stay
         var t = switchList[switchIndex];
+        history.SwitchingTo(t.Hwnd);
         if (!WindowList.Activate(t.Hwnd)) {
             Log("switch: could not activate " + t.Process + " '" + t.Title + "'");
             osd.Flash("Couldn't switch to " + t.Label, "Windows blocked the focus change (an admin window in front?)", 2500, Osd.Red);
