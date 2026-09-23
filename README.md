@@ -20,7 +20,7 @@ For a diagram of where each key sits, open [`docs/key-map.html`](docs/key-map.ht
 | **K8** | Fast mode (`Ctrl+Alt+F`) |
 | **K9 / K10** | Previous / next session or tab (`Ctrl+Shift+Tab` / `Ctrl+Tab`) |
 | **K11** | `Tab` (accept Claude's suggested reply) |
-| **Roller** | Window switcher (up: next window, down: previous). Alt stays held while rolling, released when you stop |
+| **Roller** | Window switcher (up: next window, down: previous), see below |
 | **Dial button** | Next dial mode · confirms Claude's "Switch model?" prompt |
 | **Dial: Model** | Turn to pick a model (shown in the pop-up); it is selected when you stop |
 | **Dial: Effort** | Moves Claude's effort slider, Low → Ultracode |
@@ -28,6 +28,12 @@ For a diagram of where each key sits, open [`docs/key-map.html`](docs/key-map.ht
 After any model or effort change, keyboard focus goes back to Claude's message box, so dictation and typing land where you expect.
 
 A pop-up (styled after DicTray's voice overlay) shows the current mode and changes at the bottom centre of the monitor that holds the focused window.
+
+## Window switcher
+
+The roller has its own switcher rather than Windows' Alt-Tab. The first click shows the list of open windows on every monitor, so it's in front of you wherever you're looking. It's laid out like macOS's app switcher: a row of large icons with each app's name underneath. It scrolls sideways when there are more windows than fit. Each further click moves the highlight, and it switches once you stop rolling (after 400 ms by default). The dial button switches immediately, and any other key cancels.
+
+You choose which apps it offers. In **Settings → Window switcher**, drag apps between *Shown* and *Hidden*, and decide whether apps in neither list (ones you open later) are shown or hidden.
 
 ## Per-application profiles
 
@@ -37,7 +43,7 @@ Shipped out of the box:
 
 | | K2 | K5 | K6 | K7 | K8 | K9 | K10 | K11 | Dial |
 |---|---|---|---|---|---|---|---|---|---|
-| **Vivaldi** | New tab | Close tab | Reopen closed tab | Quick Commands | Focus address bar | *(default)* | *(default)* | Bookmark page | Navigate (back/forward) · Zoom |
+| **Vivaldi** | New tab | Close tab | Reopen closed tab | Quick Commands | Focus address bar | *(default)* | *(default)* | Bookmark page | Navigate (back/forward) · Scroll |
 | **Outlook** | Send | New message | Mark as read | Delete | Mark as unread | Previous message | Next message | Go to calendar | Messages (prev/next) |
 | **Codex** (the ChatGPT desktop app's Codex workspace) | Enter | New chat | Clear unread | Archive chat | Model picker | *(default)* | *(default)* | Toggle Activity view | Font size |
 
@@ -65,13 +71,22 @@ Quit DigiDraw and disable its startup entry (Task Manager → Startup apps → T
 
 ## Configuration
 
-`k30-config.json` is created next to `K30.exe` on first run. Edit it from the tray icon (**Edit config**, then **Reload config**). The file documents itself; the main ideas:
+To open **Settings**, use the tray menu, double-click the tray icon, or launch `K30.exe` again while it runs. It has three pages:
+
+- **Buttons & dial**: every key's press, long press and double press, the roller and the dial modes, for all apps or for one app. A record button captures a shortcut from the keyboard.
+- **Window switcher**: the drag-and-drop lists described above.
+- **General**: the device address and the press timings.
+
+It follows Windows' light or dark mode, using WPF's built-in Windows 11 (Fluent) theme, so there's no extra dependency. Saving applies the changes straight away.
+
+Everything is stored in `k30-config.json`, next to `K30.exe`. Settings edits that file in place and keeps the previous version as `k30-config.json.bak`. You can still edit the file by hand, then choose **Reload config file** from the tray menu. The file documents itself; the main ideas:
 
 - `"address": "auto"` connects to the first paired device named `Turing KDial…`; or set its Bluetooth address.
 - `hidWake`, `wakeCommands`, `wakeRepeat`: the controller-mode switch sent on every (re)connect (see How it works). `wakeKickSeconds` / `digidrawPath`: optional fallback that runs DigiDraw instead.
 - Key actions are shortcuts (`ctrl+shift+tab`, `f13`, `enter`), sequences separated by commas (`ctrl+a, backspace`), `hold …` to keep keys down while the button is held, `nextMode` / `prevMode`, or `claude:model` / `claude:effort`.
 - `"K2:long"` / `"K2:double"` add a second action on a long or double press (`longPressMs`, `doublePressMs`). The plain action then fires on release.
-- The roller accepts shortcuts, `wheel+1` / `wheel-1`, or `alttab:next` / `alttab:prev`.
+- The roller accepts `switch:next` / `switch:prev` (the switcher), shortcuts, `wheel+1` / `wheel-1`, or `alttab:next` / `alttab:prev` (Windows' own Alt-Tab).
+- `switcher`: `mode` is `allow` (only the listed `apps`) or `block` (every app except them). `commitMs` is the delay before it switches.
 - Dial modes: `claude-model`, `claude-effort` (`max`: 0 Low … 4 Max, 5 Ultracode), `keys` (`cw` / `ccw` shortcuts), `alttab`.
 - `appProfiles`: per-application `keys` and `dialModes` overrides — see [Per-application profiles](#per-application-profiles).
 

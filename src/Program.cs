@@ -17,6 +17,7 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Text;
 using System.Text.Json;
 using System.Windows.Automation;
 using System.Windows.Forms;
@@ -27,11 +28,23 @@ using Windows.Devices.Enumeration;
 using Windows.Storage.Streams;
 
 static class Program {
+    public const string OpenSettingsEvent = "K30Controller.OpenSettings";
+    [DllImport("user32.dll")] static extern bool AllowSetForegroundWindow(int pid);
+
     [STAThread]
-    static void Main() {
+    static void Main(string[] args) {
         bool created;
         using (var mutex = new Mutex(true, "K30Controller.SingleInstance", out created)) {
-            if (!created) return;
+            if (!created) {
+                // Launching K30.exe again while it runs opens the settings window — except from the logon
+                // task (--autostart), which should never pop anything up.
+                if (!args.Contains("--autostart", StringComparer.OrdinalIgnoreCase)) {
+                    AllowSetForegroundWindow(-1 /* ASFW_ANY: we have the foreground, let the running instance take it */);
+                    EventWaitHandle ev;
+                    if (EventWaitHandle.TryOpenExisting(OpenSettingsEvent, out ev)) using (ev) ev.Set();
+                }
+                return;
+            }
             Application.SetHighDpiMode(HighDpiMode.PerMonitorV2); // same as DicTray's overlay
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
@@ -68,6 +81,9 @@ class Config {
     public string RollerUp, RollerDown;
     public List<DialMode> DialModes = new List<DialMode>();
     public Dictionary<string, AppProfile> AppProfiles = new Dictionary<string, AppProfile>(StringComparer.OrdinalIgnoreCase);
+    public string SwitcherMode = "block";   // "allow": only SwitcherApps; anything else: everything except SwitcherApps
+    public HashSet<string> SwitcherApps = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    public int SwitcherCommitMs = 400;
     public int LongPressMs = 450, DoublePressMs = 300;
     public string DigiDrawPath = @"%APPDATA%\TuringTablet\TuringTablet.exe";
     public int WakeKickSeconds = 0;
@@ -106,9 +122,12 @@ class Config {
     ""Dial"": ""nextMode""
   },
 
-  ""_help_roller"": ""Any shortcut, wheel+1 / wheel-1 to scroll, or alttab:next / alttab:prev to switch windows (Alt stays held while rolling and is released rollerIdleMs after the last click)."",
+  ""_help_roller"": ""switch:next / switch:prev use K30 Controller's own window switcher (see 'switcher'). Also: any shortcut, wheel+1 / wheel-1 to scroll, or alttab:next / alttab:prev for Windows' own Alt-Tab (Alt stays held while rolling and is released rollerIdleMs after the last click)."",
   ""rollerIdleMs"": 350,
-  ""roller"": { ""up"": ""alttab:next"", ""down"": ""alttab:prev"" },
+  ""roller"": { ""up"": ""switch:next"", ""down"": ""switch:prev"" },
+
+  ""_help_switcher"": ""The roller's window switcher. Its list appears on every monitor; each roller click moves the highlight, and it switches commitMs after the last click (the dial button switches right away; any other key cancels). mode 'allow': only windows of the apps in 'apps'. mode 'block': every window except those apps. Apps are process names as in appProfiles (Task Manager > Details, without '.exe'), e.g. claude, vivaldi, olk, chatgpt, WindowsTerminal."",
+  ""switcher"": { ""mode"": ""block"", ""apps"": [], ""commitMs"": 400 },
 
   ""_help_dialModes"": ""type 'keys': cw/ccw sent per click. type 'alttab': holds Alt while turning. type 'claude-model': turn to pick a model, it is selected when the dial rests for idleMs (press the dial to confirm Claude's 'Switch model?' prompt). type 'claude-effort': moves Claude's effort slider; 'max' is the highest step reachable (0 Low, 1 Medium, 2 High, 3 Extra, 4 Max, 5 Ultracode). type 'menu': first click sends 'open', next clicks send cw/ccw, 'confirm' is sent when the dial rests."",
   ""dialModes"": [
@@ -130,7 +149,7 @@ class Config {
       },
       ""dialModes"": [
         { ""name"": ""Navigate"", ""type"": ""keys"", ""cw"": ""alt+right"", ""ccw"": ""alt+left"" },
-        { ""name"": ""Zoom"",     ""type"": ""keys"", ""cw"": ""ctrl+="",    ""ccw"": ""ctrl+-"" }
+        { ""name"": ""Scroll"",   ""type"": ""keys"", ""cw"": ""wheel-1"",   ""ccw"": ""wheel+1"" }
       ]
     },
     ""olk"": {
@@ -170,8 +189,12 @@ class Config {
 
     public static Config Load(string path) {
         if (!File.Exists(path)) File.WriteAllText(path, Default);
+        return FromJson(File.ReadAllText(path));
+    }
+
+    public static Config FromJson(string json) {
         var opts = new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true };
-        using (var doc = JsonDocument.Parse(File.ReadAllText(path), opts)) {
+        using (var doc = JsonDocument.Parse(json, opts)) {
             var root = doc.RootElement;
             var c = new Config();
             JsonElement a;
@@ -191,6 +214,20 @@ class Config {
             foreach (var kv in root.GetProperty("keys").EnumerateObject()) c.Keys[kv.Name.ToUpperInvariant()] = kv.Value.GetString();
             JsonElement roller;
             if (root.TryGetProperty("roller", out roller)) { c.RollerUp = Str(roller, "up"); c.RollerDown = Str(roller, "down"); }
+            JsonElement sw;
+            if (root.TryGetProperty("switcher", out sw) && sw.ValueKind == JsonValueKind.Object) {
+                c.SwitcherMode = (Str(sw, "mode") ?? "block").Trim().ToLowerInvariant();
+                JsonElement apps;
+                if (sw.TryGetProperty("apps", out apps) && apps.ValueKind == JsonValueKind.Array)
+                    foreach (var app in apps.EnumerateArray())
+                        if (app.ValueKind == JsonValueKind.String) {
+                            string n = app.GetString().Trim();
+                            if (n.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) n = n.Substring(0, n.Length - 4);
+                            c.SwitcherApps.Add(n);
+                        }
+                JsonElement cm;
+                if (sw.TryGetProperty("commitMs", out cm) && cm.ValueKind == JsonValueKind.Number) c.SwitcherCommitMs = cm.GetInt32();
+            }
             c.DialModes = ParseDialModes(root.GetProperty("dialModes"));
             if (c.DialModes.Count == 0) throw new Exception("dialModes is empty");
 
@@ -275,6 +312,21 @@ static class Output {
             throw new Exception("Unknown key '" + p + "' in '" + combo + "'");
         }
         return vks.ToArray();
+    }
+
+    /// The config name for a virtual key, the inverse of Parse: the settings window's shortcut recorder uses it.
+    public static string NameFor(ushort vk) {
+        switch (vk) {
+            case 0x11: case 0xA2: case 0xA3: return "ctrl";
+            case 0x10: case 0xA0: case 0xA1: return "shift";
+            case 0x12: case 0xA4: case 0xA5: return "alt";
+            case 0x5B: case 0x5C: return "win";
+        }
+        foreach (var kv in Names) if (kv.Value == vk) return kv.Key; // first entry wins: enter, esc, delete, pgup…
+        if (vk >= 0x70 && vk <= 0x87) return "f" + (vk - 0x70 + 1);
+        if ((vk >= 0x30 && vk <= 0x39) || (vk >= 0x41 && vk <= 0x5A)) return ((char)vk).ToString().ToLowerInvariant();
+        uint ch = MapVirtualKey(vk, 2 /* MAPVK_VK_TO_CHAR: the unshifted character, e.g. ',' or '=' */) & 0x7FFF;
+        return ch != 0 ? ((char)ch).ToString().ToLowerInvariant() : null;
     }
 
     static INPUT Key(ushort vk, bool up) {
@@ -707,6 +759,316 @@ static class AppDetect {
     }
 }
 
+// ---------------------------------------------------------------- window switcher
+
+class SwitchTarget {
+    public IntPtr Hwnd;
+    public string Process;  // process name without ".exe", matched against the switcher's allow/block list
+    public string Label;    // the app's friendly name (file description), shown in bold
+    public string Title;    // the window's title
+    public Icon Icon;       // the app's standard icon (the settings window uses it)
+    public Bitmap Image;    // the same icon at 256 px, drawn large in the switcher
+}
+
+/// Lists the windows Alt-Tab would show, in the same most-recently-used order (EnumWindows walks the
+/// Z-order top down), and brings one to the foreground.
+static class WindowList {
+    delegate bool EnumProc(IntPtr hwnd, IntPtr lParam);
+    [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc cb, IntPtr lParam);
+    [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+    [DllImport("user32.dll")] static extern bool IsIconic(IntPtr h);
+    [DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr h, uint cmd);
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")] static extern IntPtr GetWindowLongPtr(IntPtr h, int index);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowTextLength(IntPtr h);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr h, StringBuilder sb, int max);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr h, StringBuilder sb, int max);
+    [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+    [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr h, int attr, out int value, int size);
+    [DllImport("kernel32.dll")] static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern bool QueryFullProcessImageName(IntPtr h, int flags, StringBuilder sb, ref int size);
+    [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
+    [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr h);
+    [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr h, int cmd);
+    [DllImport("user32.dll")] static extern void SwitchToThisWindow(IntPtr h, bool altTab);
+    [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+
+    const long WsExToolWindow = 0x80, WsExAppWindow = 0x40000, WsExNoActivate = 0x08000000;
+    static readonly Dictionary<string, string> Labels = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+    static readonly Dictionary<string, Icon> Icons = new Dictionary<string, Icon>(StringComparer.OrdinalIgnoreCase);
+    static readonly Dictionary<string, Bitmap> Images = new Dictionary<string, Bitmap>(StringComparer.OrdinalIgnoreCase);
+
+    public static IntPtr Foreground() { return GetForegroundWindow(); }
+
+    public static List<SwitchTarget> Snapshot(Func<string, bool> include) {
+        var list = new List<SwitchTarget>();
+        int own = Environment.ProcessId;
+        EnumWindows((h, l) => {
+            if (!IsWindowVisible(h) || GetWindow(h, 4 /* GW_OWNER */) != IntPtr.Zero) return true;
+            long ex = GetWindowLongPtr(h, -20 /* GWL_EXSTYLE */).ToInt64();
+            if ((ex & WsExAppWindow) == 0 && (ex & (WsExToolWindow | WsExNoActivate)) != 0) return true;
+            int cloaked;
+            if (DwmGetWindowAttribute(h, 14 /* DWMWA_CLOAKED */, out cloaked, 4) == 0 && cloaked != 0) return true;
+            int len = GetWindowTextLength(h);
+            if (len == 0) return true;
+            var cls = new StringBuilder(64);
+            GetClassName(h, cls, cls.Capacity);
+            if (cls.ToString() == "Progman" || cls.ToString() == "Shell_TrayWnd") return true;
+            uint pid;
+            GetWindowThreadProcessId(h, out pid);
+            if (pid == own) return true;
+            string path = ImagePath(pid);
+            string proc = path != null ? Path.GetFileNameWithoutExtension(path) : null;
+            if (proc == null || !include(proc)) return true;
+            var title = new StringBuilder(len + 1);
+            GetWindowText(h, title, title.Capacity);
+            bool frameHost = proc.Equals("ApplicationFrameHost", StringComparison.OrdinalIgnoreCase); // Store apps
+            list.Add(new SwitchTarget {
+                Hwnd = h, Process = proc, Title = title.ToString(),
+                Label = frameHost ? title.ToString() : LabelFor(path, proc),
+                Icon = frameHost ? null : IconFor(path),
+                Image = frameHost ? null : ImageFor(path)
+            });
+            return true;
+        }, IntPtr.Zero);
+        return list;
+    }
+
+    /// Brings a window to the foreground. Windows only lets the app that received the last input event
+    /// do that, so an injected Alt press (the standard trick, also what Alt-Tab itself relies on) comes
+    /// first. Returns whether the window really is in front afterwards.
+    public static bool Activate(IntPtr h) {
+        if (IsIconic(h)) ShowWindow(h, 9 /* SW_RESTORE */);
+        Output.Down(new ushort[] { 0xA4 });
+        SetForegroundWindow(h);
+        Output.Up(new ushort[] { 0xA4 });
+        if (GetForegroundWindow() == h) return true;
+        SwitchToThisWindow(h, true);
+        Thread.Sleep(40);
+        return GetForegroundWindow() == h;
+    }
+
+    static string ImagePath(uint pid) {
+        IntPtr p = OpenProcess(0x1000 /* PROCESS_QUERY_LIMITED_INFORMATION: works for admin processes too */, false, pid);
+        if (p == IntPtr.Zero) return null;
+        try {
+            var sb = new StringBuilder(1024);
+            int size = sb.Capacity;
+            return QueryFullProcessImageName(p, 0, sb, ref size) ? sb.ToString() : null;
+        } finally { CloseHandle(p); }
+    }
+
+    static string LabelFor(string path, string proc) {
+        string label;
+        if (Labels.TryGetValue(path, out label)) return label;
+        try { label = FileVersionInfo.GetVersionInfo(path).FileDescription; } catch { }
+        if (string.IsNullOrWhiteSpace(label)) label = proc;
+        Labels[path] = label;
+        return label;
+    }
+
+    static Icon IconFor(string path) {
+        Icon icon;
+        if (Icons.TryGetValue(path, out icon)) return icon;
+        try { icon = Icon.ExtractAssociatedIcon(path); } catch { icon = null; }
+        Icons[path] = icon;
+        return icon;
+    }
+
+    /// The exe's icon extracted at 256 px (sharp at the switcher's large size on high-DPI monitors too),
+    /// falling back to the standard 32 px one for files that don't carry a large icon.
+    static Bitmap ImageFor(string path) {
+        Bitmap bmp;
+        if (Images.TryGetValue(path, out bmp)) return bmp;
+        try {
+            using (var big = Icon.ExtractIcon(path, 0, 256)) bmp = big != null ? big.ToBitmap() : null;
+        } catch { bmp = null; }
+        if (bmp == null) { var small = IconFor(path); if (small != null) bmp = small.ToBitmap(); }
+        if (bmp != null) bmp = Trim(bmp);
+        Images[path] = bmp;
+        return bmp;
+    }
+
+    /// Crops an icon to its visible pixels. Apps leave very different amounts of empty margin around
+    /// their logos; without it, every logo fills its tile the same way and they all look the same size.
+    static Bitmap Trim(Bitmap src) {
+        int w = src.Width, h = src.Height, minX = w, minY = h, maxX = -1, maxY = -1, solid = 0;
+        var data = src.LockBits(new Rectangle(0, 0, w, h), System.Drawing.Imaging.ImageLockMode.ReadOnly, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+        try {
+            var row = new byte[data.Stride];
+            for (int y = 0; y < h; y++) {
+                Marshal.Copy(data.Scan0 + y * data.Stride, row, 0, row.Length);
+                for (int x = 0; x < w; x++)
+                    if (row[x * 4 + 3] > 24) { // alpha: ignore faint shadows and antialiasing haze
+                        solid++;
+                        if (x < minX) minX = x; if (x > maxX) maxX = x;
+                        if (y < minY) minY = y; if (y > maxY) maxY = y;
+                    }
+            }
+        } finally { src.UnlockBits(data); }
+        if (maxX < 0) return src;
+        int cw = maxX - minX + 1, ch = maxY - minY + 1;
+        var crop = cw == w && ch == h ? src : src.Clone(new Rectangle(minX, minY, cw, ch), System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+        if (crop != src) src.Dispose();
+        // An icon that is already a filled (rounded) square, like Vivaldi's or Claude's, becomes the tile
+        // itself instead of sitting inside one: SwitcherOsd checks this flag.
+        float aspect = (float)cw / ch;
+        crop.Tag = aspect > 0.9f && aspect < 1.1f && solid >= 0.88f * cw * ch;
+        return crop;
+    }
+}
+
+/// The switcher's list, laid out like macOS's app switcher: a dark card centred on one monitor (K30App
+/// shows one per monitor) with a horizontal row of large icons, each app's name underneath, and the
+/// selected tile highlighted. When there are more windows than fit, the row scrolls sideways to keep the
+/// selection in view, with arrows on the side that has more. Never takes focus.
+class SwitcherOsd : Form {
+    static readonly Color BackgroundColor = Color.FromArgb(15, 15, 15);
+    static readonly Color BorderColor = Color.FromArgb(31, 255, 255, 255);
+    static readonly Color LabelColor = Color.White;
+    static readonly Color DimColor = Color.FromArgb(150, 255, 255, 255);
+    static readonly Color SelectedFill = Color.FromArgb(60, 255, 255, 255);
+    static readonly Color PlateTop = Color.FromArgb(62, 62, 66);
+    static readonly Color PlateBottom = Color.FromArgb(40, 40, 44);
+    static readonly Color PlateRim = Color.FromArgb(40, 255, 255, 255);
+    const int TileWidth = 140, TileHeight = 156, IconSize = 96, Pad = 22, MaxTiles = 9, Radius = 22;
+
+    [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
+    static readonly IntPtr HwndTopmost = new IntPtr(-1);
+
+    List<SwitchTarget> items = new List<SwitchTarget>();
+    int selected, visible;
+    float scale;
+    Font labelFont, arrowFont, initialFont;
+
+    public SwitcherOsd() {
+        FormBorderStyle = FormBorderStyle.None;
+        ShowInTaskbar = false;
+        TopMost = true;
+        StartPosition = FormStartPosition.Manual;
+        BackColor = BackgroundColor;
+        Opacity = 0.94;
+        DoubleBuffered = true;
+        SetScale(1f);
+    }
+
+    protected override bool ShowWithoutActivation { get { return true; } }
+    protected override CreateParams CreateParams {
+        get {
+            var cp = base.CreateParams;
+            cp.ExStyle |= 0x20 | 0x08000000 | 0x80 | 0x8; // TRANSPARENT | NOACTIVATE | TOOLWINDOW | TOPMOST
+            return cp;
+        }
+    }
+    protected override void WndProc(ref Message m) {
+        if (m.Msg == 0x02E0) return; // WM_DPICHANGED: ShowList sizes the card for its monitor itself
+        base.WndProc(ref m);
+    }
+
+    void SetScale(float s) {
+        if (labelFont != null && Math.Abs(s - scale) < 0.01f) return;
+        scale = s;
+        if (labelFont != null) { labelFont.Dispose(); arrowFont.Dispose(); initialFont.Dispose(); }
+        labelFont = new Font("Segoe UI Semibold", 14f * s, FontStyle.Regular, GraphicsUnit.Pixel);
+        arrowFont = new Font("Segoe UI", 26f * s, FontStyle.Regular, GraphicsUnit.Pixel);
+        initialFont = new Font("Segoe UI Semibold", 44f * s, FontStyle.Regular, GraphicsUnit.Pixel);
+    }
+
+    int S(float v) { return (int)Math.Round(v * scale); }
+
+    public void ShowList(List<SwitchTarget> list, int sel, Screen screen) {
+        items = list;
+        selected = sel;
+        SetScale(Osd.ScaleFor(screen));
+        var area = screen.WorkingArea;
+        int fit = Math.Max(1, (int)((area.Width * 0.92 - S(Pad * 2)) / S(TileWidth)));
+        visible = Math.Min(items.Count, Math.Min(MaxTiles, fit));
+        int w = S(Pad * 2) + visible * S(TileWidth), h = S(Pad * 2 + TileHeight);
+        int x = area.X + (area.Width - w) / 2, y = area.Y + (area.Height - h) / 2;
+        if (!Visible) Show();
+        SetWindowPos(Handle, HwndTopmost, x, y, w, h, 0x10 | 0x40); // NOACTIVATE | SHOWWINDOW
+        using (var path = Osd.RoundedRect(new Rectangle(0, 0, w, h), S(Radius))) {
+            var old = Region;
+            Region = new Region(path);
+            if (old != null) old.Dispose();
+        }
+        Invalidate();
+    }
+
+    public void Select(int sel) { selected = sel; Invalidate(); }
+
+    /// The same rounded tile behind every app's icon, macOS style: every app gets one shape and size,
+    /// whatever its own logo looks like. A soft top-to-bottom gradient with a faint rim, like a raised key.
+    void DrawPlate(Graphics g, Rectangle r) {
+        using (var path = Osd.RoundedRect(r, (int)(r.Width * 0.225f)))
+        using (var fill = new LinearGradientBrush(r, PlateTop, PlateBottom, LinearGradientMode.Vertical))
+        using (var rim = new Pen(PlateRim, Math.Max(1f, scale))) {
+            g.FillPath(fill, path);
+            g.DrawPath(rim, path);
+        }
+    }
+
+    protected override void OnPaint(PaintEventArgs e) {
+        var g = e.Graphics;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+        g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+        using (var path = Osd.RoundedRect(new Rectangle(0, 0, Width - 1, Height - 1), S(Radius)))
+        using (var border = new Pen(BorderColor, 1f))
+            g.DrawPath(border, path);
+
+        if (visible == 0) return;
+        // Scroll so the selection sits in the middle where possible, like the vertical list did.
+        int first = Math.Max(0, Math.Min(selected - visible / 2, items.Count - visible));
+        int tw = S(TileWidth), th = S(TileHeight), icon = S(IconSize), top = S(Pad);
+        using (var fmt = new StringFormat(StringFormatFlags.NoWrap) { Trimming = StringTrimming.EllipsisCharacter, Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
+        using (var labelBrush = new SolidBrush(LabelColor))
+        using (var dimBrush = new SolidBrush(DimColor))
+        using (var selBrush = new SolidBrush(SelectedFill)) {
+            for (int v = 0; v < visible; v++) {
+                int i = first + v;
+                var t = items[i];
+                int x = S(Pad) + v * tw;
+                if (i == selected)
+                    using (var sp = Osd.RoundedRect(new Rectangle(x + S(4), top, tw - S(8), th), S(16)))
+                        g.FillPath(selBrush, sp);
+                var iconRect = new Rectangle(x + (tw - icon) / 2, top + S(14), icon, icon);
+                if (t.Image != null && t.Image.Tag is bool && (bool)t.Image.Tag) {
+                    // Already a square tile: fill the plate's shape with it, so it matches the others' outline.
+                    using (var clip = Osd.RoundedRect(iconRect, (int)(icon * 0.225f))) {
+                        var state = g.Save();
+                        g.SetClip(clip);
+                        g.DrawImage(t.Image, iconRect);
+                        g.Restore(state);
+                    }
+                    using (var clip = Osd.RoundedRect(iconRect, (int)(icon * 0.225f)))
+                    using (var rim = new Pen(PlateRim, Math.Max(1f, scale)))
+                        g.DrawPath(rim, clip);
+                } else if (t.Image != null) {
+                    DrawPlate(g, iconRect);
+                    // The (trimmed) logo sits inside the plate at a fixed size, keeping its proportions.
+                    int inner = (int)(icon * 0.66f);
+                    float k = Math.Min((float)inner / t.Image.Width, (float)inner / t.Image.Height);
+                    float iw = t.Image.Width * k, ih = t.Image.Height * k;
+                    g.DrawImage(t.Image, new RectangleF(iconRect.X + (icon - iw) / 2, iconRect.Y + (icon - ih) / 2, iw, ih));
+                } else {
+                    // No icon (Store apps): the plate with the name's first letter.
+                    DrawPlate(g, iconRect);
+                    string initial = string.IsNullOrEmpty(t.Label) ? "?" : t.Label.Substring(0, 1).ToUpperInvariant();
+                    g.DrawString(initial, initialFont, labelBrush, iconRect, fmt);
+                }
+                var nameRect = new RectangleF(x + S(8), iconRect.Bottom + S(6), tw - S(16), th - (iconRect.Bottom - top) - S(10));
+                g.DrawString(t.Label, labelFont, i == selected ? labelBrush : dimBrush, nameRect, fmt);
+            }
+            // More windows beyond the edges: an arrow in the margin on that side.
+            if (first > 0)
+                g.DrawString("‹", arrowFont, dimBrush, new RectangleF(0, 0, S(Pad), Height), fmt);
+            if (first + visible < items.Count)
+                g.DrawString("›", arrowFont, dimBrush, new RectangleF(Width - S(Pad), 0, S(Pad), Height), fmt);
+        }
+    }
+}
+
 // ---------------------------------------------------------------- on-screen display
 
 /// Pop-up styled after DicTray's voice overlay (scripts/windows-voice-overlay): dark rounded card at the
@@ -795,7 +1157,7 @@ class Osd : Form {
         return Screen.FromPoint(Cursor.Position) ?? Screen.PrimaryScreen;
     }
 
-    static float ScaleFor(Screen screen) {
+    internal static float ScaleFor(Screen screen) {
         try {
             var b = screen.Bounds;
             var mon = MonitorFromPoint(new Point(b.X + b.Width / 2, b.Y + b.Height / 2), 2 /* NEAREST */);
@@ -836,7 +1198,7 @@ class Osd : Form {
         }
     }
 
-    static GraphicsPath RoundedRect(Rectangle rect, int radius) {
+    internal static GraphicsPath RoundedRect(Rectangle rect, int radius) {
         int d = radius * 2;
         var path = new GraphicsPath();
         if (rect.Width <= d || rect.Height <= d) { path.AddRectangle(rect); return path; }
@@ -899,22 +1261,57 @@ class K30App : ApplicationContext {
     int modelCurrent, modelPending, modelDelta;
     // effort dial gesture: Claude's effort panel stays open while turning
     bool effortActive;
+    // window switcher (roller switch:next / switch:prev): the list stays up while rolling, commits when it rests
+    readonly List<SwitcherOsd> switchers = new List<SwitcherOsd>(); // one list per monitor, all showing the same thing
+    readonly System.Windows.Forms.Timer switchTimer = new System.Windows.Forms.Timer();
+    List<SwitchTarget> switchList;
+    int switchIndex;
+    bool switchActive;
 
     public K30App() {
         ui.CreateControl();
         var h = ui.Handle; // force handle so BeginInvoke works from BLE threads
         uia = new UiaWorker(e => { Log("uia: " + e); UI(() => osd.Flash("Claude control failed", e.Message, 2500, Osd.Red)); });
         idle.Tick += (s, e) => { idle.Stop(); FinishDialGesture(); };
+        switchTimer.Tick += (s, e) => { switchTimer.Stop(); CommitSwitch(); };
 
         tray.Icon = MakeIcon();
         tray.Visible = true;
         tray.ContextMenuStrip = new ContextMenuStrip();
         tray.MouseClick += (s, e) => { if (e.Button == MouseButtons.Left) ShowMode(); };
+        tray.MouseDoubleClick += (s, e) => { if (e.Button == MouseButtons.Left) OpenSettings(); };
         BuildMenu();
 
         LoadConfig(false);
         Log("started");
         Task.Run(() => ConnectLoop());
+        ListenForOpenSettings();
+    }
+
+    /// A second launch of K30.exe signals this event instead of starting another instance (see Main).
+    void ListenForOpenSettings() {
+        var ev = new EventWaitHandle(false, EventResetMode.AutoReset, Program.OpenSettingsEvent);
+        var t = new Thread(() => { while (true) { ev.WaitOne(); UI(OpenSettings); } });
+        t.IsBackground = true;
+        t.Start();
+    }
+
+    void OpenSettings() {
+        var running = new List<RunningApp>();
+        try {
+            foreach (var w in WindowList.Snapshot(p => true))
+                if (!running.Any(r => r.Process.Equals(w.Process, StringComparison.OrdinalIgnoreCase)))
+                    running.Add(new RunningApp {
+                        Process = w.Process, Icon = w.Icon,
+                        Label = w.Process.Equals("ApplicationFrameHost", StringComparison.OrdinalIgnoreCase) ? "Windows Store apps" : w.Label
+                    });
+        } catch (Exception e) { Log("settings: " + e.Message); }
+        try {
+            SettingsHost.Open(ConfigPath, running, Screen.FromPoint(Cursor.Position).WorkingArea, () => UI(() => LoadConfig(true)));
+        } catch (Exception e) {
+            Log("settings: " + e);
+            MessageBox.Show("Couldn't open the settings: " + e.Message, "K30 Controller", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
     }
 
     void BuildMenu() {
@@ -928,8 +1325,8 @@ class K30App : ApplicationContext {
                 m.Items.Add(new ToolStripMenuItem("Dial: " + cfg.DialModes[i].Name, null, (s, e) => { activeDialProfileKey = null; SetMode(idx, cfg.DialModes); }) { Checked = idx == mode && currentModes == cfg.DialModes });
             }
         m.Items.Add(new ToolStripSeparator());
-        m.Items.Add("Edit config", null, (s, e) => System.Diagnostics.Process.Start("notepad.exe", "\"" + ConfigPath + "\""));
-        m.Items.Add("Reload config", null, (s, e) => LoadConfig(true));
+        m.Items.Add(new ToolStripMenuItem("Settings…", null, (s, e) => OpenSettings()) { Font = new Font(m.Font, FontStyle.Bold) });
+        m.Items.Add("Reload config file", null, (s, e) => LoadConfig(true));
         m.Items.Add("Exit", null, (s, e) => Quit());
         tray.Text = "K30 Controller — " + (connected ? "connected" : "waiting for K30");
     }
@@ -951,7 +1348,7 @@ class K30App : ApplicationContext {
         BuildMenu();
     }
 
-    static void Validate(string action) {
+    internal static void Validate(string action) {
         if (action == null) return;
         string a = action.Trim();
         if (a.StartsWith("hold ", StringComparison.OrdinalIgnoreCase)) a = a.Substring(5);
@@ -1215,6 +1612,12 @@ class K30App : ApplicationContext {
     void Perform(int i, string action, bool allowHold) {
         if (action == null) return;
 
+        // Window switcher open: the dial button switches right away, any other key cancels it first.
+        if (switchActive) {
+            if (action.Equals("nextMode", StringComparison.OrdinalIgnoreCase) || action.Equals("prevMode", StringComparison.OrdinalIgnoreCase)) { CommitSwitch(); return; }
+            CancelSwitch();
+        }
+
         if (action.Equals("nextMode", StringComparison.OrdinalIgnoreCase) || action.Equals("prevMode", StringComparison.OrdinalIgnoreCase)) {
             // Claude asked "Switch model?" after a model dial gesture: the dial button confirms it.
             if (awaitingSwitchConfirm) {
@@ -1281,6 +1684,7 @@ class K30App : ApplicationContext {
     }
 
     void Dial(bool cw) {
+        CancelSwitch();
         RefreshDialProfile();
         var m = currentModes[mode];
         switch (m.Type) {
@@ -1336,9 +1740,66 @@ class K30App : ApplicationContext {
     void Roller(string action) {
         if (action == null) return;
         string a = action.Trim().ToLowerInvariant();
-        if (a == "alttab:next" || a == "alttab:prev") AltTab(a == "alttab:next", cfg.RollerIdleMs);
+        if (a == "switch:next" || a == "switch:prev") SwitchStep(a == "switch:next");
+        else if (a == "alttab:next" || a == "alttab:prev") AltTab(a == "alttab:next", cfg.RollerIdleMs);
         else Output.Run(action);
     }
+
+    bool IncludeInSwitcher(string process) {
+        bool listed = cfg.SwitcherApps.Contains(process);
+        return cfg.SwitcherMode == "allow" ? listed : !listed;
+    }
+
+    /// One roller click: opens the list on the first click (starting from the window you're in, like
+    /// Alt-Tab), moves the highlight on the next ones, and (re)arms the commit timer.
+    void SwitchStep(bool next) {
+        if (!switchActive) {
+            IntPtr fg = WindowList.Foreground();
+            var list = WindowList.Snapshot(IncludeInSwitcher);
+            int n = list.Count;
+            int cur = list.FindIndex(t => t.Hwnd == fg);
+            if (n == 0 || (n == 1 && cur == 0)) {
+                osd.Flash("Nothing to switch to", cfg.SwitcherMode == "allow" ? "No allowed app has another window open" : "No other window", 1200, Osd.Gray);
+                return;
+            }
+            switchList = list;
+            switchIndex = cur < 0 ? (next ? 0 : n - 1) : ((cur + (next ? 1 : -1)) % n + n) % n;
+            switchActive = true;
+            // Shown on every monitor, so it's in front of you wherever you're looking.
+            var screens = Screen.AllScreens;
+            while (switchers.Count < screens.Length) switchers.Add(new SwitcherOsd());
+            for (int s = 0; s < screens.Length; s++) switchers[s].ShowList(switchList, switchIndex, screens[s]);
+            for (int s = screens.Length; s < switchers.Count; s++) switchers[s].Hide();
+        } else {
+            int n = switchList.Count;
+            switchIndex = ((switchIndex + (next ? 1 : -1)) % n + n) % n;
+            foreach (var sw in switchers) if (sw.Visible) sw.Select(switchIndex);
+        }
+        switchTimer.Stop();
+        switchTimer.Interval = Math.Max(150, cfg.SwitcherCommitMs);
+        switchTimer.Start();
+    }
+
+    void CommitSwitch() {
+        if (!switchActive) return;
+        switchActive = false;
+        switchTimer.Stop();
+        HideSwitchers();
+        var t = switchList[switchIndex];
+        if (!WindowList.Activate(t.Hwnd)) {
+            Log("switch: could not activate " + t.Process + " '" + t.Title + "'");
+            osd.Flash("Couldn't switch to " + t.Label, "Windows blocked the focus change (an admin window in front?)", 2500, Osd.Red);
+        }
+    }
+
+    void CancelSwitch() {
+        if (!switchActive) return;
+        switchActive = false;
+        switchTimer.Stop();
+        HideSwitchers();
+    }
+
+    void HideSwitchers() { foreach (var sw in switchers) sw.Hide(); }
 
     /// Holds Alt and steps through the Alt-Tab switcher; Alt is released once input rests for idleMs.
     void AltTab(bool next, int idleMs) {
@@ -1486,6 +1947,7 @@ class K30App : ApplicationContext {
         held.Clear();
         lastMask = 0;
         CancelDialGesture();
+        CancelSwitch();
     }
 
     void Quit() {

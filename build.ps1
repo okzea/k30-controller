@@ -39,7 +39,7 @@ Remove-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 
 $taskName = 'K30Controller'
 $account = "$env:COMPUTERNAME\$env:USERNAME"
 Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
-$action = New-ScheduledTaskAction -Execute $exe -WorkingDirectory $dest
+$action = New-ScheduledTaskAction -Execute $exe -Argument '--autostart' -WorkingDirectory $dest
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $account
 $trigger.Delay = 'PT20S'
 $principal = New-ScheduledTaskPrincipal -UserId $account -LogonType Interactive
