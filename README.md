@@ -41,7 +41,9 @@ A pop-up (styled after DicTray's voice overlay) shows the current mode and chang
 ./build.ps1 -Install
 ```
 
-This publishes a self-contained `K30.exe` (no .NET install needed to run it), installs it to `%LOCALAPPDATA%\Programs\K30Controller`, registers it to start when you sign in, and starts it. Use `./build.ps1` alone to just build into `./publish`, and `-Dotnet <path>` to use a specific SDK.
+This publishes a self-contained app (no .NET install needed to run it), installs it to `%LOCALAPPDATA%\Programs\K30Controller`, registers a Scheduled Task (`K30Controller`) that starts it ~20 s after you sign in, and starts it now. Use `./build.ps1` alone to just build into `./publish`, and `-Dotnet <path>` to use a specific SDK.
+
+Published as a plain folder of files rather than a single bundled `.exe`: a single-file build re-extracts its native libraries to a temp folder on every launch, and that "unpacks itself and runs" pattern is exactly what antivirus real-time protection is most suspicious of at boot — on a machine with Bitdefender installed alongside Windows Defender, autostart failed completely and silently (no crash, nothing in `k30.log`) with the single-file build, and a Scheduled Task with a short delay survives the boot-time scan storm better than the `HKCU…\Run` key does.
 
 Quit DigiDraw and disable its startup entry (Task Manager → Startup apps → TuringTablet), or uninstall it: if both run, every key fires twice.
 
