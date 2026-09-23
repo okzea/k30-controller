@@ -52,11 +52,22 @@ class DialMode {
     public int Max = 4;      // claude-effort: highest slider step the dial may reach (4 = Max, 5 = Ultracode)
 }
 
+/// A per-application override: while the named process is in the foreground, its Keys override the
+/// global ones for the same key name, and — if non-empty — its DialModes replace the dial's mode list
+/// entirely. K1 (push-to-talk) and the roller have no override path at all: they only ever read the
+/// global Config, by construction, not by convention — see K30App.KeyAction and K30App.Roller.
+class AppProfile {
+    public string Label;
+    public Dictionary<string, string> Keys = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+    public List<DialMode> DialModes = new List<DialMode>();
+}
+
 class Config {
     public ulong Address;
     public Dictionary<string, string> Keys = new Dictionary<string, string>();
     public string RollerUp, RollerDown;
     public List<DialMode> DialModes = new List<DialMode>();
+    public Dictionary<string, AppProfile> AppProfiles = new Dictionary<string, AppProfile>(StringComparer.OrdinalIgnoreCase);
     public int LongPressMs = 450, DoublePressMs = 300;
     public string DigiDrawPath = @"%APPDATA%\TuringTablet\TuringTablet.exe";
     public int WakeKickSeconds = 0;
@@ -103,7 +114,57 @@ class Config {
   ""dialModes"": [
     { ""name"": ""Model"",           ""type"": ""claude-model"",  ""idleMs"": 900 },
     { ""name"": ""Effort"",          ""type"": ""claude-effort"", ""idleMs"": 1200, ""max"": 5 }
-  ]
+  ],
+
+  ""_help_appProfiles"": ""Per-application overrides, keyed by the process name Task Manager's Details tab shows (no '.exe'). While that process has focus: its 'keys' override the ones above for the same key, and its 'dialModes', if it has any, replace the dial's mode list. Re-checked each time you turn or press the dial, so switching apps mid-gesture is safe. K1 (push-to-talk) and the roller have no per-app override at all — they always use the mapping above, everywhere."",
+  ""appProfiles"": {
+    ""vivaldi"": {
+      ""label"": ""Vivaldi"",
+      ""keys"": {
+        ""K2"":  ""ctrl+t"",
+        ""K5"":  ""ctrl+w"",
+        ""K6"":  ""ctrl+shift+t"",
+        ""K7"":  ""f2"",
+        ""K8"":  ""ctrl+l"",
+        ""K11"": ""ctrl+d""
+      },
+      ""dialModes"": [
+        { ""name"": ""Navigate"", ""type"": ""keys"", ""cw"": ""alt+right"", ""ccw"": ""alt+left"" },
+        { ""name"": ""Zoom"",     ""type"": ""keys"", ""cw"": ""ctrl+="",    ""ccw"": ""ctrl+-"" }
+      ]
+    },
+    ""olk"": {
+      ""label"": ""Outlook"",
+      ""keys"": {
+        ""K2"":  ""ctrl+enter"",
+        ""K4"":  ""insert"",
+        ""K5"":  ""ctrl+n"",
+        ""K6"":  ""ctrl+q"",
+        ""K7"":  ""delete"",
+        ""K8"":  ""ctrl+u"",
+        ""K9"":  ""ctrl+shift+,"",
+        ""K10"": ""ctrl+shift+."",
+        ""K11"": ""ctrl+2""
+      },
+      ""dialModes"": [
+        { ""name"": ""Messages"", ""type"": ""keys"", ""cw"": ""ctrl+shift+."", ""ccw"": ""ctrl+shift+,"" }
+      ]
+    },
+    ""chatgpt"": {
+      ""label"": ""Codex"",
+      ""keys"": {
+        ""K2"":  ""enter"",
+        ""K5"":  ""ctrl+n"",
+        ""K6"":  ""shift+esc"",
+        ""K7"":  ""ctrl+shift+a"",
+        ""K8"":  ""ctrl+shift+m"",
+        ""K11"": ""ctrl+alt+u""
+      },
+      ""dialModes"": [
+        { ""name"": ""Font size"", ""type"": ""keys"", ""cw"": ""ctrl+="", ""ccw"": ""ctrl+-"" }
+      ]
+    }
+  }
 }
 ";
 
@@ -130,19 +191,39 @@ class Config {
             foreach (var kv in root.GetProperty("keys").EnumerateObject()) c.Keys[kv.Name.ToUpperInvariant()] = kv.Value.GetString();
             JsonElement roller;
             if (root.TryGetProperty("roller", out roller)) { c.RollerUp = Str(roller, "up"); c.RollerDown = Str(roller, "down"); }
-            foreach (var m in root.GetProperty("dialModes").EnumerateArray()) {
-                var d = new DialMode {
-                    Name = Str(m, "name") ?? "Mode", Type = (Str(m, "type") ?? "keys").ToLowerInvariant(),
-                    Cw = Str(m, "cw"), Ccw = Str(m, "ccw"), Open = Str(m, "open"), Confirm = Str(m, "confirm") ?? "enter"
-                };
-                JsonElement v;
-                if (m.TryGetProperty("idleMs", out v)) d.IdleMs = v.GetInt32();
-                if (m.TryGetProperty("max", out v)) d.Max = v.GetInt32();
-                c.DialModes.Add(d);
-            }
+            c.DialModes = ParseDialModes(root.GetProperty("dialModes"));
             if (c.DialModes.Count == 0) throw new Exception("dialModes is empty");
+
+            JsonElement profiles;
+            if (root.TryGetProperty("appProfiles", out profiles) && profiles.ValueKind == JsonValueKind.Object) {
+                foreach (var prof in profiles.EnumerateObject()) {
+                    var ap = new AppProfile { Label = Str(prof.Value, "label") ?? prof.Name };
+                    JsonElement pk;
+                    if (prof.Value.TryGetProperty("keys", out pk) && pk.ValueKind == JsonValueKind.Object)
+                        foreach (var kv in pk.EnumerateObject()) ap.Keys[kv.Name.ToUpperInvariant()] = kv.Value.GetString();
+                    JsonElement pd;
+                    if (prof.Value.TryGetProperty("dialModes", out pd) && pd.ValueKind == JsonValueKind.Array)
+                        ap.DialModes = ParseDialModes(pd);
+                    c.AppProfiles[prof.Name] = ap;
+                }
+            }
             return c;
         }
+    }
+
+    static List<DialMode> ParseDialModes(JsonElement arr) {
+        var list = new List<DialMode>();
+        foreach (var m in arr.EnumerateArray()) {
+            var d = new DialMode {
+                Name = Str(m, "name") ?? "Mode", Type = (Str(m, "type") ?? "keys").ToLowerInvariant(),
+                Cw = Str(m, "cw"), Ccw = Str(m, "ccw"), Open = Str(m, "open"), Confirm = Str(m, "confirm") ?? "enter"
+            };
+            JsonElement v;
+            if (m.TryGetProperty("idleMs", out v)) d.IdleMs = v.GetInt32();
+            if (m.TryGetProperty("max", out v)) d.Max = v.GetInt32();
+            list.Add(d);
+        }
+        return list;
     }
 
     static string Str(JsonElement e, string k) {
@@ -605,6 +686,27 @@ class UiaWorker {
     public void Post(Action a) { queue.Add(a); }
 }
 
+// ---------------------------------------------------------------- foreground app detection
+
+/// Which process owns the window currently in the foreground — used to pick a per-application
+/// profile. Deliberately simple (no UI Automation): fast enough to call on every key press.
+static class AppDetect {
+    [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+
+    /// The foreground window's process name (e.g. "vivaldi", no ".exe"), or null if it can't be read.
+    public static string ForegroundProcessName() {
+        try {
+            var hwnd = GetForegroundWindow();
+            if (hwnd == IntPtr.Zero) return null;
+            uint pid;
+            GetWindowThreadProcessId(hwnd, out pid);
+            if (pid == 0) return null;
+            using (var p = Process.GetProcessById((int)pid)) return p.ProcessName;
+        } catch { return null; }
+    }
+}
+
 // ---------------------------------------------------------------- on-screen display
 
 /// Pop-up styled after DicTray's voice overlay (scripts/windows-voice-overlay): dark rounded card at the
@@ -778,6 +880,10 @@ class K30App : ApplicationContext {
     readonly System.Windows.Forms.Timer idle = new System.Windows.Forms.Timer();
     Config cfg;
     int mode;
+    // The dial-mode list `mode` currently indexes into: cfg.DialModes, or one app profile's DialModes.
+    // Only re-resolved at the start of a live dial interaction (RefreshDialProfile) — see its comment.
+    List<DialMode> currentModes;
+    string activeDialProfileKey; // the AppProfiles key behind currentModes, or null for the global list
     int lastMask;
     bool menuOpen, altHeld;
     readonly Dictionary<int, ushort[]> held = new Dictionary<int, ushort[]>();
@@ -819,7 +925,7 @@ class K30App : ApplicationContext {
         if (cfg != null)
             for (int i = 0; i < cfg.DialModes.Count; i++) {
                 int idx = i;
-                m.Items.Add(new ToolStripMenuItem("Dial: " + cfg.DialModes[i].Name, null, (s, e) => SetMode(idx)) { Checked = idx == mode });
+                m.Items.Add(new ToolStripMenuItem("Dial: " + cfg.DialModes[i].Name, null, (s, e) => { activeDialProfileKey = null; SetMode(idx, cfg.DialModes); }) { Checked = idx == mode && currentModes == cfg.DialModes });
             }
         m.Items.Add(new ToolStripSeparator());
         m.Items.Add("Edit config", null, (s, e) => System.Diagnostics.Process.Start("notepad.exe", "\"" + ConfigPath + "\""));
@@ -832,8 +938,11 @@ class K30App : ApplicationContext {
         try {
             cfg = Config.Load(ConfigPath);
             foreach (var kv in cfg.Keys) Validate(kv.Value);
-            if (mode >= cfg.DialModes.Count) mode = 0;
-            if (announce) osd.Flash("Config reloaded", cfg.DialModes.Count + " dial modes", 1400, Osd.Teal);
+            foreach (var p in cfg.AppProfiles.Values) foreach (var kv in p.Keys) Validate(kv.Value);
+            currentModes = cfg.DialModes;
+            activeDialProfileKey = null;
+            if (mode >= currentModes.Count) mode = 0;
+            if (announce) osd.Flash("Config reloaded", cfg.DialModes.Count + " dial modes, " + cfg.AppProfiles.Count + " app profiles", 1400, Osd.Teal);
         } catch (Exception e) {
             Log("config error: " + e.Message);
             MessageBox.Show("k30-config.json: " + e.Message, "K30 Controller", MessageBoxButtons.OK, MessageBoxIcon.Warning);
@@ -982,7 +1091,7 @@ class K30App : ApplicationContext {
         connected = on;
         ui.BeginInvoke((Action)(() => {
             BuildMenu();
-            osd.Flash(on ? "K30 connected" : "K30 disconnected", on ? "Dial: " + cfg.DialModes[mode].Name : "Reconnecting automatically…", 1400, on ? Osd.Green : Osd.Gray);
+            osd.Flash(on ? "K30 connected" : "K30 disconnected", on ? "Dial: " + currentModes[mode].Name : "Reconnecting automatically…", 1400, on ? Osd.Green : Osd.Gray);
             if (!on) ReleaseAll();
         }));
     }
@@ -1040,9 +1149,23 @@ class K30App : ApplicationContext {
     }
     readonly Dictionary<int, Press> presses = new Dictionary<int, Press>();
 
+    /// Resolves a key's action: the foreground app's profile if it overrides this key, else the global
+    /// mapping. K1 (index 0, push-to-talk) is exempt — it never consults a profile, by construction.
     string KeyAction(int i, string suffix) {
+        string name = KeyNames[i] + suffix;
+        if (i != 0) {
+            var profile = ActiveAppProfile();
+            string pa;
+            if (profile != null && profile.Keys.TryGetValue(name, out pa) && !string.IsNullOrWhiteSpace(pa)) return pa.Trim();
+        }
         string a;
-        return cfg.Keys.TryGetValue(KeyNames[i] + suffix, out a) && !string.IsNullOrWhiteSpace(a) ? a.Trim() : null;
+        return cfg.Keys.TryGetValue(name, out a) && !string.IsNullOrWhiteSpace(a) ? a.Trim() : null;
+    }
+
+    AppProfile ActiveAppProfile() {
+        string name = AppDetect.ForegroundProcessName();
+        AppProfile p;
+        return name != null && cfg.AppProfiles.TryGetValue(name, out p) ? p : null;
     }
 
     void KeyDown(int i) {
@@ -1106,8 +1229,9 @@ class K30App : ApplicationContext {
             }
             // While a dial gesture is in progress, the dial button completes it instead.
             if (menuOpen || altHeld || modelActive || effortActive) { idle.Stop(); FinishDialGesture(); return; }
-            int n = cfg.DialModes.Count;
-            SetMode((mode + (action.Equals("nextMode", StringComparison.OrdinalIgnoreCase) ? 1 : n - 1)) % n);
+            RefreshDialProfile();
+            int n = currentModes.Count;
+            SetMode((mode + (action.Equals("nextMode", StringComparison.OrdinalIgnoreCase) ? 1 : n - 1)) % n, currentModes);
             return;
         }
 
@@ -1157,7 +1281,8 @@ class K30App : ApplicationContext {
     }
 
     void Dial(bool cw) {
-        var m = cfg.DialModes[mode];
+        RefreshDialProfile();
+        var m = currentModes[mode];
         switch (m.Type) {
             case "menu":
                 if (!menuOpen) {
@@ -1181,7 +1306,30 @@ class K30App : ApplicationContext {
                 break;
             default:
                 Output.Run(cw ? m.Cw : m.Ccw);
+                osd.Flash(m.Name, cw ? "▲" : "▼", 900, Osd.Teal);
                 break;
+        }
+    }
+
+    /// Re-checks which app has focus and switches currentModes/mode to that app's profile's dial modes
+    /// if it has any (else the global list). Called only at the start of a LIVE dial interaction — a
+    /// turn, or the dial button's nextMode/prevMode — never from something that merely finishes or
+    /// displays an already-decided gesture, so switching focus mid-gesture never yanks it out from under you.
+    void RefreshDialProfile() {
+        string name = AppDetect.ForegroundProcessName();
+        AppProfile profile = null;
+        if (name != null) cfg.AppProfiles.TryGetValue(name, out profile);
+        bool hasOwn = profile != null && profile.DialModes.Count > 0;
+        var modes = hasOwn ? profile.DialModes : cfg.DialModes;
+        string key = hasOwn ? name.ToLowerInvariant() : null;
+        if (key != activeDialProfileKey) {
+            activeDialProfileKey = key;
+            currentModes = modes;
+            CancelDialGesture();
+            mode = 0;
+            osd.Flash((hasOwn ? profile.Label : "Default") + " — " + modes[0].Name, "Dial", 1200, Osd.Teal);
+        } else if (mode >= modes.Count) {
+            mode = 0;
         }
     }
 
@@ -1306,7 +1454,7 @@ class K30App : ApplicationContext {
     void RestartIdle(int ms) { idle.Stop(); idle.Interval = Math.Max(150, ms); idle.Start(); }
 
     void FinishDialGesture() {
-        if (menuOpen) { menuOpen = false; Output.Run(cfg.DialModes[mode].Confirm); }
+        if (menuOpen) { menuOpen = false; Output.Run(currentModes[mode].Confirm); }
         if (altHeld) { altHeld = false; Output.Up(new ushort[] { 0xA4 }); }
         if (modelActive) ApplyModel();
         if (effortActive) EndEffort();
@@ -1320,16 +1468,17 @@ class K30App : ApplicationContext {
         if (effortActive) { effortActive = false; uia.Post(() => { claude.EffortEnd(); claude.RestoreComposer(); }); }
     }
 
-    void SetMode(int i) {
+    void SetMode(int i, List<DialMode> modes) {
         CancelDialGesture();
+        currentModes = modes;
         mode = i;
         BuildMenu();
         ShowMode();
     }
 
     void ShowMode() {
-        var names = cfg.DialModes.Select((d, idx) => idx == mode ? "● " + d.Name : d.Name);
-        osd.Flash("Dial: " + cfg.DialModes[mode].Name, string.Join("   ·   ", names), 1600, Osd.Teal);
+        var names = currentModes.Select((d, idx) => idx == mode ? "● " + d.Name : d.Name);
+        osd.Flash("Dial: " + currentModes[mode].Name, string.Join("   ·   ", names), 1600, Osd.Teal);
     }
 
     void ReleaseAll() {

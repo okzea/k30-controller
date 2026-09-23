@@ -29,6 +29,22 @@ After any model or effort change, keyboard focus goes back to Claude's message b
 
 A pop-up (styled after DicTray's voice overlay) shows the current mode and changes at the bottom centre of the monitor that holds the focused window.
 
+## Per-application profiles
+
+Every key except **K1** (push-to-talk) and the **roller** (window switcher) can be remapped per application: while a given app is in the foreground, its own `keys` and `dialModes` take over; anywhere else, the default mapping above applies. This is checked fresh on every key press and every dial turn, so it's safe to switch apps mid-gesture — the gesture that was in progress is simply abandoned rather than continuing to steer the wrong app.
+
+Shipped out of the box:
+
+| | K2 | K5 | K6 | K7 | K8 | K9 | K10 | K11 | Dial |
+|---|---|---|---|---|---|---|---|---|---|
+| **Vivaldi** | New tab | Close tab | Reopen closed tab | Quick Commands | Focus address bar | *(default)* | *(default)* | Bookmark page | Navigate (back/forward) · Zoom |
+| **Outlook** | Send | New message | Mark as read | Delete | Mark as unread | Previous message | Next message | Go to calendar | Messages (prev/next) |
+| **Codex** (the ChatGPT desktop app's Codex workspace) | Enter | New chat | Clear unread | Archive chat | Model picker | *(default)* | *(default)* | Toggle Activity view | Font size |
+
+*(default)* means that key falls through unchanged to the mapping above (K9/K10's `Ctrl+Shift+Tab`/`Ctrl+Tab` already cycle tabs in both apps; K3/K4 aren't overridden either — Esc and clear-field are broadly correct everywhere, except Outlook's K4, which is remapped to Flag message since select-all-and-backspace is destructive in an email draft.)
+
+A profile is keyed by process name (Task Manager's Details tab, without `.exe`): Vivaldi is `vivaldi`, the new Outlook for Windows is `olk` (not classic Outlook's `OUTLOOK`), and the Codex/ChatGPT desktop app is `chatgpt`. Add more the same way — see `appProfiles` in `k30-config.json`.
+
 ## Requirements
 
 - Windows 10 2004+ / Windows 11, Bluetooth LE
@@ -57,6 +73,7 @@ Quit DigiDraw and disable its startup entry (Task Manager → Startup apps → T
 - `"K2:long"` / `"K2:double"` add a second action on a long or double press (`longPressMs`, `doublePressMs`). The plain action then fires on release.
 - The roller accepts shortcuts, `wheel+1` / `wheel-1`, or `alttab:next` / `alttab:prev`.
 - Dial modes: `claude-model`, `claude-effort` (`max`: 0 Low … 4 Max, 5 Ultracode), `keys` (`cw` / `ccw` shortcuts), `alttab`.
+- `appProfiles`: per-application `keys` and `dialModes` overrides — see [Per-application profiles](#per-application-profiles).
 
 ## How it works
 
@@ -83,6 +100,8 @@ It also sends DigiDraw's status queries to characteristic `FFE2` (8-byte writes 
 This was worked out from Windows Bluetooth traces (`wpr` with Microsoft's `BluetoothStack.wprp`) of DigiDraw switching the device. The old approach, running DigiDraw briefly, is still available as a fallback: set `wakeKickSeconds` > 0.
 
 **Claude desktop.** Model and effort are driven through UI Automation (the accessibility tree), not keyboard shortcuts: the composer's `Model: …` and `Effort: …` buttons, the model menu's radio items, the effort panel's slider, the `Switch model?` dialog, and the `Prompt` edit field. If a Claude update renames these, those features stop working until the names are updated in `ClaudeUi`.
+
+**Per-application profiles.** Deliberately not UI Automation: just `GetForegroundWindow` + `GetWindowThreadProcessId`, cheap enough to call on every key press and dial turn. K1 and the roller never consult a profile at all — `KeyAction` special-cases K1's index, and the roller's handler reads `cfg.RollerUp`/`RollerDown` directly, bypassing the whole profile-lookup path — so there's no config that can move them, not just a convention not to.
 
 ## Limitations
 
