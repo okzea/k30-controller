@@ -21,13 +21,19 @@ For a diagram of where each key sits, open [`docs/key-map.html`](docs/key-map.ht
 | **K9 / K10** | Previous / next session or tab (`Ctrl+Shift+Tab` / `Ctrl+Tab`) |
 | **K11** | `Tab` (accept Claude's suggested reply) |
 | **Roller** | Window switcher (up: next window, down: previous), see below |
-| **Dial button** | Next dial mode · confirms Claude's "Switch model?" prompt |
+| **Dial button** | Next dial mode · confirms Claude's "Switch model?" prompt · hold: the key sheet (see below) |
 | **Dial: Effort** (default) | Moves Claude's effort slider, Low → Ultracode |
 | **Dial: Model** | Turn to pick a model (shown in the pop-up); it is selected when you stop |
 
 After any model or effort change, keyboard focus goes back to Claude's message box, so dictation and typing land where you expect.
 
 A pop-up (styled after DicTray's voice overlay) shows the current mode and changes at the bottom centre of the monitor that holds the focused window.
+
+## Key sheet
+
+Hold the dial button to see what every control does in the app you're in. It shows the picture of the K30 with a label for each key, the dial and the roller: the key's name ("New tab"), with its shortcut and any long or double press underneath. It appears on every monitor, in the same style as the pop-up. The next press of any key closes it and still does that key's job, so you can look and then press; turning the dial or the roller also closes it, and it closes on its own after 12 seconds.
+
+The names come from `labels` in `k30-config.json` (the **Name** column in Settings). An app profile's keys use its own names, and a key it changes without naming shows its shortcut instead. The action is `showKeys`, mapped to `Dial:long` by default.
 
 ## Window switcher
 
@@ -85,6 +91,7 @@ Everything is stored in `k30-config.json`, next to `K30.exe`. Settings edits tha
 - `hidWake`, `wakeCommands`, `wakeRepeat`: the controller-mode switch sent on every (re)connect (see How it works). `wakeKickSeconds` / `digidrawPath`: optional fallback that runs DigiDraw instead.
 - Key actions are shortcuts (`ctrl+shift+tab`, `f13`, `enter`), sequences separated by commas (`ctrl+a, backspace`), `hold …` to keep keys down while the button is held, `nextMode` / `prevMode`, or `claude:model` / `claude:effort`.
 - `"K2:long"` / `"K2:double"` add a second action on a long or double press (`longPressMs`, `doublePressMs`). The plain action then fires on release.
+- Scrolling (`wheel+1` / `wheel-1`) always scrolls the window you're working in, even when the mouse pointer rests on another one: the pointer is moved there for the scroll and straight back.
 - The roller accepts `switch:next` / `switch:prev` (the switcher), shortcuts, `wheel+1` / `wheel-1`, or `alttab:next` / `alttab:prev` (Windows' own Alt-Tab).
 - `switcher`: `mode` is `allow` (only the listed `apps`) or `block` (every app except them). `commitMs` is the delay before it switches.
 - Dial modes: `claude-model`, `claude-effort` (`max`: 0 Low … 4 Max, 5 Ultracode), `keys` (`cw` / `ccw` shortcuts), `alttab`.

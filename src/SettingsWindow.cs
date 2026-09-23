@@ -70,6 +70,7 @@ class ProfileModel {
     public string Label;
     public JsonObject Node;    // the profile's JSON as loaded, so properties this window doesn't show survive
     public readonly Dictionary<string, string> Keys = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+    public readonly Dictionary<string, string> Labels = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase); // names for the key sheet
     public readonly List<JsonObject> Modes = new List<JsonObject>();
 }
 
@@ -259,6 +260,7 @@ class SettingsWindow : Window {
     void LoadModel() {
         var def = new ProfileModel { Process = null, Label = "All apps", Node = root };
         ReadKeys(root["keys"] as JsonObject, def.Keys);
+        ReadKeys(root["labels"] as JsonObject, def.Labels);
         ReadModes(root["dialModes"] as JsonArray, def.Modes);
         profiles.Add(def);
         var aps = root["appProfiles"] as JsonObject;
@@ -267,6 +269,7 @@ class SettingsWindow : Window {
                 var node = kv.Value as JsonObject ?? new JsonObject();
                 var p = new ProfileModel { Process = kv.Key, Label = Str(node, "label") ?? kv.Key, Node = node };
                 ReadKeys(node["keys"] as JsonObject, p.Keys);
+                ReadKeys(node["labels"] as JsonObject, p.Labels);
                 ReadModes(node["dialModes"] as JsonArray, p.Modes);
                 profiles.Add(p);
             }
@@ -517,6 +520,22 @@ class SettingsWindow : Window {
         }
     }
 
+    /// A plain text box with a grey placeholder shown while it's empty.
+    static Grid PlaceholderBox(string value, string placeholder, Action<string> changed) {
+        var box = new TextBox { Text = value ?? "", MinWidth = 60 };
+        var hint = new TextBlock { Text = placeholder ?? "", IsHitTestVisible = false, Margin = new Thickness(11, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
+        hint.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorTertiaryBrush");
+        hint.Visibility = box.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
+        box.TextChanged += (s, e) => {
+            hint.Visibility = box.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
+            changed(box.Text.Trim());
+        };
+        var g = new Grid();
+        g.Children.Add(box);
+        g.Children.Add(hint);
+        return g;
+    }
+
     static Border RowBack(Grid g, int row, int span) {
         var b = new Border { Background = Brushes.Transparent, CornerRadius = new CornerRadius(6), Margin = new Thickness(-6, 0, -2, 0) };
         Grid.SetRow(b, row);
@@ -618,16 +637,31 @@ class SettingsWindow : Window {
 
         // buttons
         panel.Children.Add(Section("Buttons"));
-        var g = Columns(Px(110), Star(), Star(), Star());
+        var g = Columns(Px(100), Star(0.85), Star(), Star(), Star());
         int hr = AddRow(g);
-        for (int c = 0; c < SuffixNames.Length; c++) Place(g, Header(SuffixNames[c]), hr, c + 1);
+        var nameHeader = Header("Name");
+        nameHeader.ToolTip = "What the key does, in words: the key sheet (hold the dial button) shows it";
+        Place(g, nameHeader, hr, 1);
+        for (int c = 0; c < SuffixNames.Length; c++) Place(g, Header(SuffixNames[c]), hr, c + 2);
         foreach (var key in KeyOrder) {
             int r = AddRow(g);
             var name = new TextBlock { Text = key == "Dial" ? "Dial button" : key, VerticalAlignment = VerticalAlignment.Center, FontWeight = FontWeights.SemiBold };
             if (key == "K1") name.ToolTip = "Push-to-talk: the same in every app";
             Place(g, name, r, 0);
-            var back = RowBack(g, r, 4);
-            var fields = new List<FrameworkElement> { back, name };
+            var back = RowBack(g, r, 5);
+            string label, defLabel;
+            p.Labels.TryGetValue(key, out label);
+            def.Labels.TryGetValue(key, out defLabel);
+            // An app's placeholder is the default name, but only while it keeps the default action.
+            var labelField = PlaceholderBox(label, app && !p.Keys.ContainsKey(key) ? defLabel : "", v => {
+                if (v.Length == 0) p.Labels.Remove(key); else p.Labels[key] = v;
+                Dirty();
+            });
+            labelField.Margin = new Thickness(4, 3, 4, 3);
+            AutomationProperties.SetName(labelField, name.Text + " name");
+            if (app && key == "K1") labelField.IsEnabled = false;
+            Place(g, labelField, r, 1);
+            var fields = new List<FrameworkElement> { back, name, labelField };
             for (int c = 0; c < Suffixes.Length; c++) {
                 string k = key + Suffixes[c];
                 string val, dv;
@@ -639,15 +673,15 @@ class SettingsWindow : Window {
                 f.AccessibleName = name.Text + " " + SuffixNames[c];
                 if (locked) { f.IsEnabled = false; f.ToolTip = "Push-to-talk is the same in every app"; ToolTipService.SetShowOnDisabled(f, true); }
                 f.Changed += v => { if (v.Length == 0) p.Keys.Remove(k); else p.Keys[k] = v; Dirty(); };
-                Place(g, f, r, c + 1);
+                Place(g, f, r, c + 2);
                 fields.Add(f);
             }
-            Link(key, new KeyRow { Back = back, Field = (ShortcutField)fields[2], Anchor = back }, fields.ToArray());
+            Link(key, new KeyRow { Back = back, Field = (ShortcutField)fields[3], Anchor = back }, fields.ToArray());
         }
         panel.Children.Add(g);
         panel.Children.Add(Caption(
             "Shortcuts: ctrl+shift+t, alt+left, f13… Several in a row: ctrl+a, backspace. 'hold ctrl+space' keeps the keys down while the button is held. " +
-            "Also: nextMode / prevMode (dial modes), claude:model, claude:effort, wheel+1 / wheel-1. The keyboard button records a shortcut. " +
+            "Also: nextMode / prevMode (dial modes), claude:model, claude:effort, wheel+1 / wheel-1, showKeys (the key sheet: a picture of the K30 with every key's Name). The keyboard button records a shortcut. " +
             "A long or double press action makes the plain press fire on release.", 8));
 
         // roller
@@ -1059,6 +1093,7 @@ class SettingsWindow : Window {
         root["longPressMs"] = longMs;
         root["doublePressMs"] = doubleMs;
         root["keys"] = KeysNode(def.Keys);
+        SetLabels(root, def.Labels);
         var roller = (root["roller"] as JsonObject)?.DeepClone() as JsonObject ?? new JsonObject();
         SetOrRemove(roller, "up", rollerUp);
         SetOrRemove(roller, "down", rollerDown);
@@ -1079,6 +1114,7 @@ class SettingsWindow : Window {
             var n = (JsonObject)p.Node.DeepClone();
             n["label"] = p.Label;
             n["keys"] = KeysNode(p.Keys);
+            SetLabels(n, p.Labels);
             if (p.Modes.Count > 0) n["dialModes"] = ModesNode(p.Modes); else n.Remove("dialModes");
             aps[p.Process] = n;
         }
@@ -1113,6 +1149,11 @@ class SettingsWindow : Window {
         foreach (var kv in keys)
             if (!canonical.Contains(kv.Key) && !string.IsNullOrWhiteSpace(kv.Value)) o[kv.Key] = kv.Value.Trim();
         return o;
+    }
+
+    static void SetLabels(JsonObject owner, Dictionary<string, string> labels) {
+        var o = KeysNode(labels);
+        if (o.Count > 0) owner["labels"] = o; else owner.Remove("labels");
     }
 
     static JsonArray ModesNode(List<JsonObject> modes) {

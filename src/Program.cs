@@ -72,12 +72,14 @@ class DialMode {
 class AppProfile {
     public string Label;
     public Dictionary<string, string> Keys = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+    public Dictionary<string, string> Labels = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase); // what each key does, in words, for the key sheet
     public List<DialMode> DialModes = new List<DialMode>();
 }
 
 class Config {
     public ulong Address;
     public Dictionary<string, string> Keys = new Dictionary<string, string>();
+    public Dictionary<string, string> Labels = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase); // same key names as Keys
     public string RollerUp, RollerDown;
     public List<DialMode> DialModes = new List<DialMode>();
     public Dictionary<string, AppProfile> AppProfiles = new Dictionary<string, AppProfile>(StringComparer.OrdinalIgnoreCase);
@@ -104,7 +106,7 @@ class Config {
   ""wakeKickSeconds"": 0,
   ""digidrawPath"": ""%APPDATA%\\TuringTablet\\TuringTablet.exe"",
 
-  ""_help_keys"": ""Shortcut syntax: ctrl+shift+i, alt+tab, win+tab, esc, enter, up, down, f13... Separate several with commas to send them in order (ctrl+a, backspace). Prefix with 'hold ' to keep the keys down while the button is held (push-to-talk). 'nextMode' / 'prevMode' cycle the dial mode. 'claude:model' / 'claude:effort' open Claude's model menu / effort panel. Add 'K2:long' or 'K2:double' for a second action on a long or double press (the plain action then fires on release)."",
+  ""_help_keys"": ""Shortcut syntax: ctrl+shift+i, alt+tab, win+tab, esc, enter, up, down, f13... Separate several with commas to send them in order (ctrl+a, backspace). Prefix with 'hold ' to keep the keys down while the button is held (push-to-talk). 'nextMode' / 'prevMode' cycle the dial mode. 'claude:model' / 'claude:effort' open Claude's model menu / effort panel. 'showKeys' shows the key sheet: a picture of the K30 with what each key does in the app you're in. Add 'K2:long' or 'K2:double' for a second action on a long or double press (the plain action then fires on release)."",
   ""longPressMs"": 450,
   ""doublePressMs"": 300,
   ""keys"": {
@@ -120,7 +122,14 @@ class Config {
     ""K9"":  ""ctrl+shift+tab"",
     ""K10"": ""ctrl+tab"",
     ""K11"": ""tab"",
-    ""Dial"": ""nextMode""
+    ""Dial"": ""nextMode"",
+    ""Dial:long"": ""showKeys""
+  },
+  ""_help_labels"": ""What each key does, in words: the key sheet (hold the dial button, 'showKeys') shows these, with the shortcut underneath. Same key names as 'keys'. App profiles have their own 'labels' for the keys they change."",
+  ""labels"": {
+    ""K1"": ""Push-to-talk"", ""K2"": ""Send"", ""K2:long"": ""Queue message"", ""K3"": ""Stop / cancel"", ""K4"": ""Clear field"",
+    ""K5"": ""New session"", ""K6"": ""Read / unread"", ""K7"": ""Archive session"", ""K8"": ""Fast mode"",
+    ""K9"": ""Previous session"", ""K10"": ""Next session"", ""K11"": ""Accept suggestion"", ""Dial"": ""Next dial mode"", ""Dial:long"": ""This key sheet""
   },
 
   ""_help_roller"": ""switch:next / switch:prev use K30 Controller's own window switcher (see 'switcher'). Also: any shortcut, wheel+1 / wheel-1 to scroll, or alttab:next / alttab:prev for Windows' own Alt-Tab (Alt stays held while rolling and is released rollerIdleMs after the last click)."",
@@ -148,6 +157,7 @@ class Config {
         ""K8"":  ""ctrl+l"",
         ""K11"": ""ctrl+d""
       },
+      ""labels"": { ""K2"": ""New tab"", ""K5"": ""Close tab"", ""K6"": ""Reopen closed tab"", ""K7"": ""Quick Commands"", ""K8"": ""Address bar"", ""K11"": ""Bookmark page"" },
       ""dialModes"": [
         { ""name"": ""Navigate"", ""type"": ""keys"", ""cw"": ""alt+right"", ""ccw"": ""alt+left"" },
         { ""name"": ""Scroll"",   ""type"": ""keys"", ""cw"": ""wheel-1"",   ""ccw"": ""wheel+1"" }
@@ -166,6 +176,7 @@ class Config {
         ""K10"": ""ctrl+shift+."",
         ""K11"": ""ctrl+2""
       },
+      ""labels"": { ""K2"": ""Send"", ""K4"": ""Flag message"", ""K5"": ""New message"", ""K6"": ""Mark as read"", ""K7"": ""Delete"", ""K8"": ""Mark as unread"", ""K9"": ""Previous message"", ""K10"": ""Next message"", ""K11"": ""Calendar"" },
       ""dialModes"": [
         { ""name"": ""Messages"", ""type"": ""keys"", ""cw"": ""ctrl+shift+."", ""ccw"": ""ctrl+shift+,"" }
       ]
@@ -180,6 +191,7 @@ class Config {
         ""K8"":  ""ctrl+shift+m"",
         ""K11"": ""ctrl+alt+u""
       },
+      ""labels"": { ""K2"": ""Send"", ""K5"": ""New chat"", ""K6"": ""Clear unread"", ""K7"": ""Archive chat"", ""K8"": ""Model picker"", ""K11"": ""Activity view"" },
       ""dialModes"": [
         { ""name"": ""Font size"", ""type"": ""keys"", ""cw"": ""ctrl+="", ""ccw"": ""ctrl+-"" }
       ]
@@ -213,6 +225,7 @@ class Config {
                 foreach (var w in a.EnumerateArray()) if (w.ValueKind == JsonValueKind.String) c.WakeCommands.Add(w.GetString());
             }
             foreach (var kv in root.GetProperty("keys").EnumerateObject()) c.Keys[kv.Name.ToUpperInvariant()] = kv.Value.GetString();
+            ReadLabels(root, c.Labels);
             JsonElement roller;
             if (root.TryGetProperty("roller", out roller)) { c.RollerUp = Str(roller, "up"); c.RollerDown = Str(roller, "down"); }
             JsonElement sw;
@@ -240,6 +253,7 @@ class Config {
                     JsonElement pk;
                     if (prof.Value.TryGetProperty("keys", out pk) && pk.ValueKind == JsonValueKind.Object)
                         foreach (var kv in pk.EnumerateObject()) ap.Keys[kv.Name.ToUpperInvariant()] = kv.Value.GetString();
+                    ReadLabels(prof.Value, ap.Labels);
                     JsonElement pd;
                     if (prof.Value.TryGetProperty("dialModes", out pd) && pd.ValueKind == JsonValueKind.Array)
                         ap.DialModes = ParseDialModes(pd);
@@ -248,6 +262,14 @@ class Config {
             }
             return c;
         }
+    }
+
+    static void ReadLabels(JsonElement owner, Dictionary<string, string> into) {
+        JsonElement labels;
+        if (!owner.TryGetProperty("labels", out labels) || labels.ValueKind != JsonValueKind.Object) return;
+        foreach (var kv in labels.EnumerateObject())
+            if (kv.Value.ValueKind == JsonValueKind.String && kv.Value.GetString().Trim().Length > 0)
+                into[kv.Name.ToUpperInvariant()] = kv.Value.GetString().Trim();
     }
 
     static List<DialMode> ParseDialModes(JsonElement arr) {
@@ -347,13 +369,48 @@ static class Output {
     public static void Up(ushort[] vks) { Send(vks.Reverse().Select(v => Key(v, true))); }
     public static void Tap(ushort[] vks) { Send(vks.Select(v => Key(v, false)).Concat(vks.Reverse().Select(v => Key(v, true)))); }
 
+    [StructLayout(LayoutKind.Sequential)] struct POINT { public int X, Y; }
+    [StructLayout(LayoutKind.Sequential)] struct RECT { public int Left, Top, Right, Bottom; }
+    [DllImport("user32.dll")] static extern bool GetCursorPos(out POINT p);
+    [DllImport("user32.dll")] static extern IntPtr WindowFromPoint(POINT p);
+    [DllImport("user32.dll")] static extern IntPtr GetAncestor(IntPtr h, uint flags);
+    [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out RECT r);
+    [DllImport("user32.dll")] static extern bool IsIconic(IntPtr h);
+    [DllImport("user32.dll")] static extern int GetSystemMetrics(int index);
+
+    /// Scrolls the window you're working in. Windows sends the wheel to the window under the pointer,
+    /// wherever the keyboard focus is, so when the pointer rests on another window, the pointer is moved
+    /// to the middle of the active window for the scroll and straight back, in a single batch of input
+    /// so nothing can come in between.
     public static void Wheel(int clicks) {
-        var i = new INPUT { type = 0 };
-        i.u.mi = new MOUSEINPUT { mouseData = unchecked((uint)(clicks * 120)), dwFlags = MOUSEEVENTF_WHEEL, dwExtraInfo = Tag };
-        Send(new[] { i });
+        var wheel = new INPUT { type = 0 };
+        wheel.u.mi = new MOUSEINPUT { mouseData = unchecked((uint)(clicks * 120)), dwFlags = MOUSEEVENTF_WHEEL, dwExtraInfo = Tag };
+        POINT at;
+        RECT r;
+        IntPtr fg = GetForegroundWindow();
+        if (fg == IntPtr.Zero || !GetCursorPos(out at) || IsIconic(fg) || !GetWindowRect(fg, out r) ||
+            GetAncestor(WindowFromPoint(at), 2 /* GA_ROOT */) == fg) {
+            Send(new[] { wheel });
+            return;
+        }
+        var middle = new POINT { X = (r.Left + r.Right) / 2, Y = (r.Top + r.Bottom) / 2 };
+        Send(new[] { MoveTo(middle), wheel, MoveTo(at) });
     }
 
-    /// Runs a configured action string: "ctrl+n", "wheel+1", ...
+    static INPUT MoveTo(POINT p) {
+        // Absolute coordinates span the whole virtual desktop (all monitors), 0…65535 on each axis.
+        int vx = GetSystemMetrics(76), vy = GetSystemMetrics(77), vw = GetSystemMetrics(78), vh = GetSystemMetrics(79);
+        var i = new INPUT { type = 0 };
+        i.u.mi = new MOUSEINPUT {
+            dx = (int)Math.Round((p.X - vx) * 65535.0 / Math.Max(1, vw - 1)),
+            dy = (int)Math.Round((p.Y - vy) * 65535.0 / Math.Max(1, vh - 1)),
+            dwFlags = 0x0001 | 0x8000 | 0x4000, // MOVE | ABSOLUTE | VIRTUALDESK
+            dwExtraInfo = Tag
+        };
+        return i;
+    }
+
     /// Runs a configured action string: "ctrl+n", "wheel+1", or a sequence like "ctrl+a, backspace".
     public static void Run(string action) {
         if (string.IsNullOrWhiteSpace(action)) return;
@@ -1328,6 +1385,9 @@ class K30App : ApplicationContext {
     List<SwitchTarget> switchList;
     int switchIndex, switchCurrent; // the highlight, and the window you were in when the list opened (-1: none)
     readonly SwitchHistory history = new SwitchHistory();
+    // key sheet: one per monitor, closed by the next K30 input or after a while
+    readonly List<KeySheet> sheets = new List<KeySheet>();
+    readonly System.Windows.Forms.Timer sheetTimer = new System.Windows.Forms.Timer();
     bool switchActive;
 
     public K30App() {
@@ -1336,6 +1396,7 @@ class K30App : ApplicationContext {
         uia = new UiaWorker(e => { Log("uia: " + e); UI(() => osd.Flash("Claude control failed", e.Message, 2500, Osd.Red)); });
         idle.Tick += (s, e) => { idle.Stop(); FinishDialGesture(); };
         switchTimer.Tick += (s, e) => { switchTimer.Stop(); CommitSwitch(); };
+        sheetTimer.Tick += (s, e) => HideKeySheet();
 
         tray.Icon = MakeIcon();
         tray.Visible = true;
@@ -1417,6 +1478,7 @@ class K30App : ApplicationContext {
         if (a.StartsWith("hold ", StringComparison.OrdinalIgnoreCase)) a = a.Substring(5);
         if (a.Equals("nextMode", StringComparison.OrdinalIgnoreCase) || a.Equals("prevMode", StringComparison.OrdinalIgnoreCase) || a.StartsWith("wheel", StringComparison.OrdinalIgnoreCase) || a.Length == 0) return;
         if (a.Equals("claude:model", StringComparison.OrdinalIgnoreCase) || a.Equals("claude:effort", StringComparison.OrdinalIgnoreCase)) return;
+        if (a.Equals("showKeys", StringComparison.OrdinalIgnoreCase)) return;
         foreach (var step in a.Split(',')) {
             string s = step.Trim();
             if (s.Length > 0 && !s.StartsWith("wheel", StringComparison.OrdinalIgnoreCase)) Output.Parse(s);
@@ -1586,12 +1648,16 @@ class K30App : ApplicationContext {
             int mask = b[5] | (b[6] << 8);
             int changed = mask ^ lastMask;
             lastMask = mask;
+            // The key sheet closes on the next press (which still does its job, so you can look, then
+            // press), but not on the release of the long press that opened it.
+            if ((changed & mask) != 0) HideKeySheet();
             for (int i = 0; i < KeyNames.Length; i++) {
                 int bit = 1 << i;
                 if ((changed & bit) == 0) continue;
                 if ((mask & bit) != 0) KeyDown(i); else KeyUp(i);
             }
         } else if (b[2] == 0x20) {
+            HideKeySheet();
             bool forward = b[5] == 0x01;
             if (b[4] == 0x01) Roller(forward ? cfg.RollerUp : cfg.RollerDown);
             else Dial(forward);
@@ -1661,7 +1727,8 @@ class K30App : ApplicationContext {
 
     void Gesture(int i, string action, string kind) {
         if (action == null) return;
-        osd.Flash(Pretty(action), kind + "  ·  " + KeyNames[i], 900, Osd.Green);
+        if (!action.Equals("showKeys", StringComparison.OrdinalIgnoreCase)) // the sheet is its own feedback
+            osd.Flash(Pretty(action), kind + "  ·  " + KeyNames[i], 900, Osd.Green);
         Perform(i, action, false);
     }
 
@@ -1674,6 +1741,7 @@ class K30App : ApplicationContext {
     /// gesture keys only know what they were once released, so there they are sent as a tap.
     void Perform(int i, string action, bool allowHold) {
         if (action == null) return;
+        if (action.Equals("showKeys", StringComparison.OrdinalIgnoreCase)) { CancelSwitch(); ShowKeySheet(); return; }
 
         // Window switcher open: the dial button switches right away, any other key cancels it first.
         if (switchActive) {
@@ -1806,6 +1874,84 @@ class K30App : ApplicationContext {
         if (a == "switch:next" || a == "switch:prev") SwitchStep(a == "switch:next");
         else if (a == "alttab:next" || a == "alttab:prev") AltTab(a == "alttab:next", cfg.RollerIdleMs);
         else Output.Run(action);
+    }
+
+    // ---- key sheet ("showKeys"): what every control does in the app you're in
+
+    void ShowKeySheet() {
+        var profile = ActiveAppProfile();
+        var list = new List<SheetEntry>();
+        for (int i = 0; i < KeyNames.Length; i++) list.Add(KeyEntry(i, profile));
+
+        var modes = profile != null && profile.DialModes.Count > 0 ? profile.DialModes : cfg.DialModes;
+        int active = modes == currentModes && mode < modes.Count ? mode : 0;
+        list.Add(new SheetEntry {
+            Id = "DialTurn", Tag = "TURN", Title = modes[active].Name,
+            Detail = modes.Count > 1 ? "modes: " + string.Join(" · ", modes.Select(m => m.Name)) : "the dial's only mode"
+        });
+        string up = (cfg.RollerUp ?? "").Trim(), down = (cfg.RollerDown ?? "").Trim();
+        bool switcherRoller = up.StartsWith("switch:", StringComparison.OrdinalIgnoreCase);
+        list.Add(new SheetEntry {
+            Id = "Roller", Tag = "ROLL",
+            Title = switcherRoller ? "Switch windows" : up.StartsWith("alttab:", StringComparison.OrdinalIgnoreCase) ? "Alt-Tab" : Friendly(up) ?? "Nothing",
+            Detail = switcherRoller ? "roll to pick, stop to switch" : "up: " + (Friendly(up) ?? "—") + " · down: " + (Friendly(down) ?? "—")
+        });
+
+        string title = profile != null ? profile.Label : "All apps";
+        string subtitle = "Press any key or turn the dial to close";
+        var screens = Screen.AllScreens;
+        while (sheets.Count < screens.Length) sheets.Add(new KeySheet());
+        for (int s = 0; s < screens.Length; s++) sheets[s].ShowSheet(title, subtitle, list, screens[s]);
+        for (int s = screens.Length; s < sheets.Count; s++) sheets[s].Hide();
+        sheetTimer.Stop();
+        sheetTimer.Interval = 12000;
+        sheetTimer.Start();
+    }
+
+    void HideKeySheet() {
+        sheetTimer.Stop();
+        foreach (var s in sheets) if (s.Visible) s.Hide();
+    }
+
+    SheetEntry KeyEntry(int i, AppProfile profile) {
+        string press = KeyAction(i, ""), longAction = KeyAction(i, ":LONG"), doubleAction = KeyAction(i, ":DOUBLE");
+        string name = LabelFor(i, "", profile);
+        var detail = new List<string>();
+        if (name != null && press != null && Friendly(press) != name) detail.Add(Friendly(press)); // the shortcut, under its name
+        if (longAction != null) detail.Add("hold: " + (LabelFor(i, ":LONG", profile) ?? Friendly(longAction)));
+        if (doubleAction != null) detail.Add("double: " + (LabelFor(i, ":DOUBLE", profile) ?? Friendly(doubleAction)));
+        return new SheetEntry {
+            Id = i == 11 ? "Dial" : KeyNames[i], Tag = i == 11 ? "PRESS" : KeyNames[i],
+            Title = name ?? Friendly(press) ?? "Nothing", Detail = string.Join("  ·  ", detail)
+        };
+    }
+
+    /// A key's name in words: the app profile's label if it has one; none if the profile changes the
+    /// key without naming it (the global name would describe the wrong action); else the global label.
+    string LabelFor(int i, string suffix, AppProfile profile) {
+        string key = KeyNames[i] + suffix.ToUpperInvariant(), label;
+        if (i != 0 && profile != null) {
+            if (profile.Labels.TryGetValue(key, out label)) return label;
+            if (profile.Keys.ContainsKey(key)) return null;
+        }
+        return cfg.Labels.TryGetValue(key, out label) ? label : null;
+    }
+
+    /// An action as a person would say it: "Ctrl+Shift+T", "Hold Ctrl+Space", "Scroll down"…
+    static string Friendly(string action) {
+        if (string.IsNullOrWhiteSpace(action)) return null;
+        string a = action.Trim();
+        switch (a.ToLowerInvariant()) {
+            case "nextmode": return "Next dial mode";
+            case "prevmode": return "Previous dial mode";
+            case "showkeys": return "This key sheet";
+            case "claude:model": return "Claude's model menu";
+            case "claude:effort": return "Claude's effort panel";
+            case "wheel+1": return "Scroll up";
+            case "wheel-1": return "Scroll down";
+        }
+        if (a.StartsWith("hold ", StringComparison.OrdinalIgnoreCase)) return "Hold " + Pretty(a.Substring(5).Trim());
+        return Pretty(a);
     }
 
     bool IncludeInSwitcher(string process) {
