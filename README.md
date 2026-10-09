@@ -91,7 +91,8 @@ Everything is stored in `k30-config.json`, next to `K30.exe`. Settings edits tha
 - `hidWake`, `wakeCommands`, `wakeRepeat`: the controller-mode switch sent on every (re)connect (see How it works). `wakeKickSeconds` / `digidrawPath`: optional fallback that runs DigiDraw instead.
 - Key actions are shortcuts (`ctrl+shift+tab`, `f13`, `enter`), sequences separated by commas (`ctrl+a, backspace`), `hold …` to keep keys down while the button is held, `nextMode` / `prevMode`, or `claude:model` / `claude:effort`.
 - `"K2:long"` / `"K2:double"` add a second action on a long or double press (`longPressMs`, `doublePressMs`). The plain action then fires on release.
-- Scrolling (`wheel+1` / `wheel-1`) always scrolls the window you're working in, even when the mouse pointer rests on another one: the pointer is moved there for the scroll and straight back.
+- Mouse buttons: `mouse:left`, `mouse:right`, `mouse:middle`, `mouse:back`, `mouse:forward` (the thumb buttons games often bind), usable anywhere a shortcut is.
+- Scrolling (`wheel+1` / `wheel-1`) and mouse buttons always go to the window you're working in, even when the mouse pointer rests on another one: the pointer is moved there for the scroll or click and straight back.
 - The roller accepts `switch:next` / `switch:prev` (the switcher), shortcuts, `wheel+1` / `wheel-1`, or `alttab:next` / `alttab:prev` (Windows' own Alt-Tab).
 - `switcher`: `mode` is `allow` (only the listed `apps`) or `block` (every app except them). `commitMs` is the delay before it switches.
 - Dial modes: `claude-model`, `claude-effort` (`max`: 0 Low … 4 Max, 5 Ultracode), `keys` (`cw` / `ccw` shortcuts), `alttab`.

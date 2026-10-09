@@ -106,7 +106,7 @@ class Config {
   ""wakeKickSeconds"": 0,
   ""digidrawPath"": ""%APPDATA%\\TuringTablet\\TuringTablet.exe"",
 
-  ""_help_keys"": ""Shortcut syntax: ctrl+shift+i, alt+tab, win+tab, esc, enter, up, down, f13... Separate several with commas to send them in order (ctrl+a, backspace). Prefix with 'hold ' to keep the keys down while the button is held (push-to-talk). 'nextMode' / 'prevMode' cycle the dial mode. 'claude:model' / 'claude:effort' open Claude's model menu / effort panel. 'showKeys' shows the key sheet: a picture of the K30 with what each key does in the app you're in. Add 'K2:long' or 'K2:double' for a second action on a long or double press (the plain action then fires on release)."",
+  ""_help_keys"": ""Shortcut syntax: ctrl+shift+i, alt+tab, win+tab, esc, enter, up, down, f13... Separate several with commas to send them in order (ctrl+a, backspace). Prefix with 'hold ' to keep the keys down while the button is held (push-to-talk). 'nextMode' / 'prevMode' cycle the dial mode. 'claude:model' / 'claude:effort' open Claude's model menu / effort panel. 'showKeys' shows the key sheet: a picture of the K30 with what each key does in the app you're in. Mouse buttons: mouse:left, mouse:right, mouse:middle, mouse:back, mouse:forward (clicked in the window you're in). Add 'K2:long' or 'K2:double' for a second action on a long or double press (the plain action then fires on release)."",
   ""longPressMs"": 450,
   ""doublePressMs"": 300,
   ""keys"": {
@@ -379,23 +379,68 @@ static class Output {
     [DllImport("user32.dll")] static extern bool IsIconic(IntPtr h);
     [DllImport("user32.dll")] static extern int GetSystemMetrics(int index);
 
-    /// Scrolls the window you're working in. Windows sends the wheel to the window under the pointer,
-    /// wherever the keyboard focus is, so when the pointer rests on another window, the pointer is moved
-    /// to the middle of the active window for the scroll and straight back, in a single batch of input
-    /// so nothing can come in between.
+    /// Scrolls the window you're working in (see AtActiveWindow).
     public static void Wheel(int clicks) {
         var wheel = new INPUT { type = 0 };
         wheel.u.mi = new MOUSEINPUT { mouseData = unchecked((uint)(clicks * 120)), dwFlags = MOUSEEVENTF_WHEEL, dwExtraInfo = Tag };
-        POINT at;
+        AtActiveWindow(wheel);
+    }
+
+    // Mouse buttons for "mouse:<button>" steps: (down flag, up flag, mouseData). back / forward are the
+    // thumb buttons (X1 / X2), which games often bind (TFT scouts players with them).
+    static readonly Dictionary<string, uint[]> Buttons = new Dictionary<string, uint[]>(StringComparer.OrdinalIgnoreCase) {
+        { "left", new uint[] { 0x0002, 0x0004, 0 } }, { "right", new uint[] { 0x0008, 0x0010, 0 } },
+        { "middle", new uint[] { 0x0020, 0x0040, 0 } },
+        { "back", new uint[] { 0x0080, 0x0100, 1 } }, { "forward", new uint[] { 0x0080, 0x0100, 2 } },
+    };
+
+    public static bool IsMouseStep(string step) { return step.Trim().StartsWith("mouse:", StringComparison.OrdinalIgnoreCase); }
+    public static bool IsMouseButton(string step) { return IsMouseStep(step) && Buttons.ContainsKey(step.Trim().Substring(6).Trim()); }
+
+    // Clicks hold the button down briefly. A press and release sent in the same instant can land in one
+    // game frame, and games built on Unreal's Enhanced Input (TFT) can miss the press altogether.
+    const int ClickHoldMs = 40;
+    static readonly object ClickLock = new object();
+    static Task clickQueue = Task.CompletedTask; // clicks run one after another, off the UI thread
+
+    /// A click of one mouse button ("mouse:middle"…), in the window you're working in, like Wheel.
+    public static void Click(string step) {
+        uint[] b;
+        if (!Buttons.TryGetValue(step.Trim().Substring(6).Trim(), out b)) throw new Exception("Unknown mouse button in '" + step + "'");
+        var down = new INPUT { type = 0 };
+        down.u.mi = new MOUSEINPUT { mouseData = b[2], dwFlags = b[0], dwExtraInfo = Tag };
+        var up = new INPUT { type = 0 };
+        up.u.mi = new MOUSEINPUT { mouseData = b[2], dwFlags = b[1], dwExtraInfo = Tag };
+        lock (ClickLock)
+            clickQueue = clickQueue.ContinueWith(_ => {
+                POINT at, middle;
+                bool away = PointerAway(out at, out middle);
+                Send(away ? new[] { MoveTo(middle), down } : new[] { down });
+                Thread.Sleep(ClickHoldMs);
+                Send(away ? new[] { up, MoveTo(at) } : new[] { up });
+            }, TaskScheduler.Default);
+    }
+
+    /// Sends mouse input to the window you're working in. Windows sends it to the window under the
+    /// pointer, wherever the keyboard focus is, so when the pointer rests on another window it is moved
+    /// to the middle of the active window for this input and straight back, in a single batch of input
+    /// so nothing can come in between.
+    static void AtActiveWindow(params INPUT[] inputs) {
+        POINT at, middle;
+        if (!PointerAway(out at, out middle)) { Send(inputs); return; }
+        Send(new[] { MoveTo(middle) }.Concat(inputs).Concat(new[] { MoveTo(at) }));
+    }
+
+    /// Whether the pointer rests outside the active window; if so, where it is and the active window's middle.
+    static bool PointerAway(out POINT at, out POINT middle) {
+        at = new POINT(); middle = new POINT();
         RECT r;
         IntPtr fg = GetForegroundWindow();
         if (fg == IntPtr.Zero || !GetCursorPos(out at) || IsIconic(fg) || !GetWindowRect(fg, out r) ||
-            GetAncestor(WindowFromPoint(at), 2 /* GA_ROOT */) == fg) {
-            Send(new[] { wheel });
-            return;
-        }
-        var middle = new POINT { X = (r.Left + r.Right) / 2, Y = (r.Top + r.Bottom) / 2 };
-        Send(new[] { MoveTo(middle), wheel, MoveTo(at) });
+            GetAncestor(WindowFromPoint(at), 2 /* GA_ROOT */) == fg)
+            return false;
+        middle = new POINT { X = (r.Left + r.Right) / 2, Y = (r.Top + r.Bottom) / 2 };
+        return true;
     }
 
     static INPUT MoveTo(POINT p) {
@@ -418,6 +463,7 @@ static class Output {
             string s = step.Trim();
             if (s.Length == 0) continue;
             if (s.StartsWith("wheel", StringComparison.OrdinalIgnoreCase)) Wheel(int.Parse(s.Substring(5)));
+            else if (IsMouseStep(s)) Click(s);
             else Tap(Parse(s));
         }
     }
@@ -1481,7 +1527,12 @@ class K30App : ApplicationContext {
         if (a.Equals("showKeys", StringComparison.OrdinalIgnoreCase)) return;
         foreach (var step in a.Split(',')) {
             string s = step.Trim();
-            if (s.Length > 0 && !s.StartsWith("wheel", StringComparison.OrdinalIgnoreCase)) Output.Parse(s);
+            if (s.Length == 0 || s.StartsWith("wheel", StringComparison.OrdinalIgnoreCase)) continue;
+            if (Output.IsMouseStep(s)) {
+                if (!Output.IsMouseButton(s)) throw new Exception("Unknown mouse button in '" + s + "': use mouse:left, mouse:right, mouse:middle, mouse:back or mouse:forward");
+            } else {
+                Output.Parse(s);
+            }
         }
     }
 
@@ -1743,9 +1794,10 @@ class K30App : ApplicationContext {
         if (action == null) return;
         if (action.Equals("showKeys", StringComparison.OrdinalIgnoreCase)) { CancelSwitch(); ShowKeySheet(); return; }
 
-        // Window switcher open: the dial button switches right away, any other key cancels it first.
+        // Window switcher open: the dial button switches right away (whatever an app profile maps it to),
+        // any other key cancels it first.
         if (switchActive) {
-            if (action.Equals("nextMode", StringComparison.OrdinalIgnoreCase) || action.Equals("prevMode", StringComparison.OrdinalIgnoreCase)) { CommitSwitch(); return; }
+            if (i == 11 || action.Equals("nextMode", StringComparison.OrdinalIgnoreCase) || action.Equals("prevMode", StringComparison.OrdinalIgnoreCase)) { CommitSwitch(); return; }
             CancelSwitch();
         }
 
@@ -1949,6 +2001,11 @@ class K30App : ApplicationContext {
             case "claude:effort": return "Claude's effort panel";
             case "wheel+1": return "Scroll up";
             case "wheel-1": return "Scroll down";
+            case "mouse:left": return "Left click";
+            case "mouse:right": return "Right click";
+            case "mouse:middle": return "Middle click";
+            case "mouse:back": return "Mouse back button";
+            case "mouse:forward": return "Mouse forward button";
         }
         if (a.StartsWith("hold ", StringComparison.OrdinalIgnoreCase)) return "Hold " + Pretty(a.Substring(5).Trim());
         return Pretty(a);

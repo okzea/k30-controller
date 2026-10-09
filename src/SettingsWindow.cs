@@ -681,7 +681,7 @@ class SettingsWindow : Window {
         panel.Children.Add(g);
         panel.Children.Add(Caption(
             "Shortcuts: ctrl+shift+t, alt+left, f13… Several in a row: ctrl+a, backspace. 'hold ctrl+space' keeps the keys down while the button is held. " +
-            "Also: nextMode / prevMode (dial modes), claude:model, claude:effort, wheel+1 / wheel-1, showKeys (the key sheet: a picture of the K30 with every key's Name). The keyboard button records a shortcut. " +
+            "Also: nextMode / prevMode (dial modes), claude:model, claude:effort, wheel+1 / wheel-1, mouse:left / right / middle / back / forward, showKeys (the key sheet: a picture of the K30 with every key's Name). The keyboard button records a shortcut. " +
             "A long or double press action makes the plain press fire on release.", 8));
 
         // roller
