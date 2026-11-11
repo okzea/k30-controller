@@ -1,8 +1,8 @@
 # K30 Controller
 
-A small Windows tray app that replaces the DigiDraw software for the **Turing KeyDial K30** and turns it into a controller for the **Claude desktop app**: switch sessions, pick the model and effort with the dial, push-to-talk, queue messages.
+A small Windows tray app, an unofficial companion for the **Turing KeyDial K30**, that turns it into a controller for the **Claude desktop app**: switch sessions, pick the model and effort with the dial, push-to-talk, queue messages.
 
-It talks to the K30 directly over Bluetooth LE and does everything DigiDraw did, so DigiDraw is not needed.
+It talks to the K30 directly over Bluetooth LE, so it runs on its own, without DigiDraw open. It is an independent project, not affiliated with or endorsed by the maker of the K30.
 
 For a diagram of where each key sits, open [`docs/key-map.html`](docs/key-map.html) in a browser.
 
